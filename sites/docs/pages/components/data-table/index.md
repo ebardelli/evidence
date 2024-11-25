@@ -1175,24 +1175,22 @@ UNION ALL
 SELECT 'Brazil', 'South America', 1609, 0.032, 0.1375, 0.1007, 0.091, -4.5, 80.27, -1.8, 213.32
 ```
 
-<DocTab>
-    <div slot='preview'>
-        <DataTable data={countries} totalRow=true rows=5 groupBy=continent groupType=section totalRowColor=#f2f2f2>
-          <Column id=continent totalAgg="Total" totalFmt='# "Unique continents"'/>
-          <Column id=country totalAgg=countDistinct totalFmt='0 "countries"'/>
-          <Column id=gdp_usd totalAgg=sum fmt='$#,##0"B"' totalFmt='$#,##0.0,"T"' colGroup="GDP"/>
-          <Column id=gdp_growth totalAgg=weightedMean weightCol=gdp_usd fmt='pct1' colGroup="GDP" contentType=delta/>
-          <Column id=jobless_rate totalAgg=weightedMean weightCol=gdp_usd fmt='pct1' contentType=colorscale scaleColor=red colGroup="Labour Market"/>
-          <Column id=population totalAgg=sum fmt='#,##0"M"' totalFmt='#,##0.0,"B"' colGroup="Labour Market"/>
-          <Column id=interest_rate totalAgg=weightedMean weightCol=gdp_usd fmt='pct2' wrapTitle=false colGroup="Other"/>
-          <Column id=inflation_rate totalAgg=weightedMean weightCol=gdp_usd fmt='pct2' colGroup="Other"/>
-          <Column id=gov_budget totalAgg=weightedMean weightCol=gdp_usd fmt='0.0"%"' contentType=delta colGroup="Other"/>
-          <Column id=current_account totalAgg=weightedMean weightCol=gdp_usd fmt='0.0"%"' colGroup="Other"/>
-        </DataTable>
-    </div>
-
 ```svelte
-<DataTable data={countries} totalRow=true rows=5 groupBy=continent groupType=section totalRowColor=#f2f2f2>
+<DataTable data={countries} totalRow=true rows=5 subtotals=true groupBy=continent groupType=section totalRowColor=#f2f2f2>
+  <Column id=continent totalAgg="Total" totalFmt='# "Unique continents"'/>
+  <Column id=country totalAgg=countDistinct totalFmt='0 "countries"'/>
+  <Column id=gdp_usd totalAgg=sum fmt='$#,##0"B"' totalFmt='$#,##0.0,"T"' colGroup="GDP"/>
+  <Column id=gdp_growth totalAgg=weightedMean weightCol=gdp_usd fmt='pct1' colGroup="GDP" contentType=delta/>
+  <Column id=jobless_rate totalAgg=weightedMean weightCol=gdp_usd fmt='pct1' contentType=colorscale scaleColor=red colGroup="Labour Market"/>
+  <Column id=population totalAgg=sum fmt='#,##0"M"' totalFmt='#,##0.0,"B"' colGroup="Labour Market"/>
+  <Column id=interest_rate totalAgg=weightedMean weightCol=gdp_usd fmt='pct2' wrapTitle=false colGroup="Other"/>
+  <Column id=inflation_rate totalAgg=weightedMean weightCol=gdp_usd fmt='pct2' colGroup="Other"/>
+  <Column id=gov_budget totalAgg=weightedMean weightCol=gdp_usd fmt='0.0"%"' contentType=delta colGroup="Other"/>
+  <Column id=current_account totalAgg=weightedMean weightCol=gdp_usd fmt='0.0"%"' colGroup="Other"/>
+</DataTable>
+```
+
+<DataTable data={countries} totalRow=true rows=5  subtotals=true groupBy=continent groupType=section totalRowColor=#f2f2f2>
   <Column id=continent totalAgg="Total" totalFmt='# "Unique continents"'/>
   <Column id=country totalAgg=countDistinct totalFmt='0 "countries"'/>
   <Column id=gdp_usd totalAgg=sum fmt='$#,##0"B"' totalFmt='$#,##0.0,"T"' colGroup="GDP"/>
