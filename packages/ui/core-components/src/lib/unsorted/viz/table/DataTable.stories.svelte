@@ -165,6 +165,7 @@
 		<Column id="sales" fmt="usd" />
 	</DataTable>
 </Story>
+
 <Story name="With Search (Long Columns)">
 	{@const data = Query.create(`SELECT * from blog_posts`, query)}
 	<DataTable {data} title="Blog Posts" search />
