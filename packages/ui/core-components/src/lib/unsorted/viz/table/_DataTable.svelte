@@ -118,13 +118,11 @@
 	$: showLinkCol = showLinkCol === 'true' || showLinkCol === true;
 
 	let error = undefined;
-	let groupDataPopulated = false;
 
 	// ---------------------------------------------------------------------------------------
 	// Add props to store to let child components access them
 	// ---------------------------------------------------------------------------------------
 	props.update((d) => {
-		groupDataPopulated = false;
 		return { ...d, data, columns: [] };
 	});
 
@@ -308,6 +306,10 @@
 					? 1 * sortModifier
 					: 0;
 
+		const sortedFilteredData = [...filteredData].sort(comparator);
+
+		filteredData = sortedFilteredData;
+
 		if (groupBy) {
 			const sortedGroupedData = {};
 
@@ -316,9 +318,6 @@
 			}
 
 			groupedData = sortedGroupedData;
-		} else {
-			const sortedFilteredData = [...filteredData].sort(comparator);
-			filteredData = sortedFilteredData;
 		}
 	};
 
@@ -330,10 +329,6 @@
 				const valA = a[1][sortObj.col],
 					valB = b[1][sortObj.col];
 				// Use the existing sort logic but apply it to groupRowData's values
-				// Special case for groupby column
-				if (sortObj.col === groupBy && isNaN(groupBy)) {
-					return sortObj.ascending ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]);
-				}
 				if (
 					(valA === undefined || valA === null || isNaN(valA)) &&
 					valB !== undefined &&
@@ -437,17 +432,14 @@
 	let groupRowData = [];
 
 	$: if (!error) {
-		if (groupBy && !groupDataPopulated) {
-			groupedData = data.reduce((acc, row) => {
-				const groupName = row[groupBy];
-				if (!acc[groupName]) {
-					acc[groupName] = [];
-				}
-				acc[groupName].push(row);
-				return acc;
-			}, {});
-			groupDataPopulated = true;
-		}
+		groupedData = data.reduce((acc, row) => {
+			const groupName = row[groupBy];
+			if (!acc[groupName]) {
+				acc[groupName] = [];
+			}
+			acc[groupName].push(row);
+			return acc;
+		}, {});
 
 		// After groupedData is populated, calculate aggregations for groupRowData
 		groupRowData = Object.keys(groupedData).reduce((acc, groupName) => {
