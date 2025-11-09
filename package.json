@@ -70,6 +70,9 @@
 		"unist-util-visit": "4.1.2",
 		"uvu": "0.5.2",
 		"vite": "5.4.14"
+	,
+		"globby": "^13.2.2",
+		"js-yaml": "^4.1.0"
 	},
 	"scripts": {
 		"release": "run-s package:core-components build:tailwind build:evidence && pnpm changeset publish",
@@ -99,7 +102,11 @@
 		"build:evidence": "pnpm --filter ./packages/evidence build",
 		"build:preprocess": "pnpm --filter ./packages/lib/preprocess build",
 		"build:tailwind": "pnpm --filter ./packages/ui/tailwind build",
-		"sources:core-components": "pnpm --filter ./packages/ui/core-components sources"
+		"sources:core-components": "pnpm --filter ./packages/ui/core-components sources",
+		"pack:monorepo": "node ./scripts/pack-workspaces.js"
+	},
+	"bin": {
+		"pack-workspaces": "./scripts/pack-workspaces.js"
 	},
 	"pnpm": {
 		"overrides": {
