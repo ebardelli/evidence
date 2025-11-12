@@ -220,4 +220,55 @@ test('query batches results properly', async () => {
 	}
 });
 
+test('handles leading SET statements before main query', async () => {
+	try {
+		const query = `
+		SET VARIABLE VAR1 = DATE '2023-10-04';
+		SET VARIABLE VAR2 = '23';
+		select 1 union all select 2 union all select 3;
+		`;
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		// should batch into [2,1]
+		assert.equal(arr[0].length, 2);
+		assert.equal(arr[1].length, 1);
+		assert.equal(expectedRowCount, 3);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
+test('semicolon inside single-quoted string should not split statements', async () => {
+	try {
+		const query = "SET V='this;is;a;string'; select 1 union all select 2;";
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		assert.equal(expectedRowCount, 2);
+		assert.equal(arr[0].length, 2);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
+test('semicolon inside block comment should not split statements', async () => {
+	try {
+		const query = "/* comment; still comment; */ select 1 union all select 2;";
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		assert.equal(expectedRowCount, 2);
+		assert.equal(arr[0].length, 2);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
 test.run();
