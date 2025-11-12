@@ -116,6 +116,7 @@ function duckdbDescribeToEvidenceType(describe) {
 
 /** @type {import("@evidence-dev/db-commons").RunQuery<DuckDBOptions>} */
 const runQuery = async (queryString, database, batchSize = 100000) => {
+	try {
 	let filename = ':memory:';
 
 	if (database?.filename) {
@@ -138,6 +139,9 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		custom_user_agent: 'evidence-dev'
 	});
 	const conn = await db.connect();
+	if (process.env.DEBUG_DUCKDB) {
+		console.error('[duckdb] connection ->', { filename, mode });
+	}
 
 	// Helper: split SQL into statements while ignoring semicolons inside
 	// single/double/backtick quotes and inside SQL comments (line: --, block: /* */).
@@ -239,17 +243,23 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	let executedPrefixStmts = [];
 	try {
 		const stmts = splitSqlStatements(queryString);
+		if (process.env.DEBUG_DUCKDB) {
+			console.error('[duckdb] splitSqlStatements ->', stmts);
+		}
 		if (stmts.length > 1) {
 			// run all prefix statements (everything except the last) synchronously and
 			// consume any result sets via runAndReadAll/readAll so the connection's
 			// session state is updated and no hanging result readers remain.
 			for (let i = 0; i < stmts.length - 1; i++) {
 				try {
+					if (process.env.DEBUG_DUCKDB) console.error('[duckdb] executing prefix stmt ->', stmts[i]);
 					const r = await conn.runAndReadAll(stmts[i] + ';');
 					// Ensure we consume any rows to avoid leaving unconsumed results
 					await r.readAll();
 					executedPrefixStmts.push(stmts[i]);
+					if (process.env.DEBUG_DUCKDB) console.error('[duckdb] prefix executed ->', stmts[i]);
 				} catch (err) {
+					if (process.env.DEBUG_DUCKDB) console.error('[duckdb] prefix stmt error ->', err && err.message ? err.message : err);
 					// ignore initialization errors - downstream query may still succeed
 				}
 			}
@@ -257,6 +267,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		}
 	} catch (e) {
 		// If splitting fails for any reason, fall back to using the entire query string.
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] split error ->', e && e.message ? e.message : e);
 		mainStatement = queryString;
 	}
 
@@ -277,9 +288,23 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	// metadata queries (count/describe). This ensures those queries inherit any
 	// session-level settings (like SET or USE) even if the underlying API
 	// executes them in a separate session.
-	const count_query = `WITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
+	// If we executed prefix statements successfully, include them inline before
+	// metadata queries so session-affecting commands (USE, SET) are applied
+	// even if the driver runs metadata queries in a separate context.
+	// Only inline prefix statements that are session-affecting and safe to re-run
+	// (e.g., SET, USE). Do NOT inline DDL (CREATE TABLE/SCHEMA) which would
+	// error if executed a second time since we already ran them above.
+	const safePrefix = (executedPrefixStmts || []).filter((s) => {
+		const t = s.trim().toUpperCase();
+		return t.startsWith('SET ') || t.startsWith('USE ');
+	});
+	const prefixSql = safePrefix.length
+		? safePrefix.map((s) => (s.trim().endsWith(';') ? s.trim() : s.trim() + ';')).join('\n') + '\n'
+		: '';
+	const count_query = `${prefixSql}WITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
 	let expected_row_count = null;
 	try {
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] count_query ->', count_query);
 		const countReader = await conn.runAndReadAll(count_query);
 		await countReader.readAll();
 		const countRow = countReader.getRowObjectsJS()?.[0];
@@ -287,22 +312,28 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 			// take the first value from the row (column name may vary)
 			expected_row_count = Object.values(countRow)[0];
 		}
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] count result ->', expected_row_count);
 	} catch (e) {
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] count_query error ->', e && e.message ? e.message : e);
 		expected_row_count = null;
 	}
 
-	const column_query = `DESCRIBE ${cleanQuery(mainStatement)}`;
+	const column_query = `${prefixSql}DESCRIBE ${cleanQuery(mainStatement)}`;
 	let column_types = null;
 	try {
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] column_query ->', column_query);
 		const colReader = await conn.runAndReadAll(column_query);
 		await colReader.readAll();
 		const describeRows = colReader.getRowObjectsJS();
 		column_types = duckdbDescribeToEvidenceType(describeRows);
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] describe result ->', describeRows);
 	} catch (e) {
+		if (process.env.DEBUG_DUCKDB) console.error('[duckdb] column_query error ->', e && e.message ? e.message : e);
 		column_types = null;
 	}
 
 	// Create an async generator that yields batches using the DuckDBResultReader
+	if (process.env.DEBUG_DUCKDB) console.error('[duckdb] streaming mainStatement ->', mainStatement);
 	const reader = await conn.streamAndRead(mainStatement);
 
 	const rowsAsyncIterable = (async function* () {
@@ -314,6 +345,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 				await reader.readUntil(target);
 				const allRows = reader.getRowObjectsJS();
 				const newRows = allRows.slice(prev).map(standardizeRow);
+				if (process.env.DEBUG_DUCKDB) console.error('[duckdb] reader progress ->', { currentRowCount: reader.currentRowCount, newRowsSample: newRows.slice(0,3) });
 				// yield rows one-by-one (asyncIterableToBatchedAsyncGenerator expects single-row yields)
 				for (const r of newRows) {
 					yield r;
@@ -331,7 +363,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		}
 	})();
 
-	const results = await asyncIterableToBatchedAsyncGenerator(rowsAsyncIterable, batchSize, {
+		const results = await asyncIterableToBatchedAsyncGenerator(rowsAsyncIterable, batchSize, {
 		mapResultsToEvidenceColumnTypes:
 			column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
 		standardizeRow,
@@ -354,6 +386,18 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	}
 
 	return results;
+	} catch (err) {
+		if (process.env.DEBUG_DUCKDB) {
+			console.error('[duckdb] runQuery ERROR ->', {
+				message: err && err.message ? err.message : String(err),
+				queryString: queryString && queryString.slice ? queryString.slice(0, 200) : queryString,
+				mainStatement: typeof mainStatement !== 'undefined' ? mainStatement : undefined,
+				executedPrefixStmts,
+				databaseFilename: database?.filename ?? filename
+			});
+		}
+		throw err;
+	}
 };
 
 module.exports = runQuery;
