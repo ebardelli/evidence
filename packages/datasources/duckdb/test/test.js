@@ -258,7 +258,7 @@ test('semicolon inside single-quoted string should not split statements', async 
 
 test('semicolon inside block comment should not split statements', async () => {
 	try {
-		const query = "/* comment; still comment; */ select 1 union all select 2;";
+		const query = '/* comment; still comment; */ select 1 union all select 2;';
 		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
 		const arr = [];
 		for await (const batch of rows()) {

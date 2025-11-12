@@ -322,7 +322,8 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	})();
 
 	const results = await asyncIterableToBatchedAsyncGenerator(rowsAsyncIterable, batchSize, {
-		mapResultsToEvidenceColumnTypes: column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
+		mapResultsToEvidenceColumnTypes:
+			column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
 		standardizeRow,
 		closeConnection: () => {
 			try {
