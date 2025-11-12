@@ -149,6 +149,121 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	});
 	const conn = await db.connect();
 
+	// Helper: split SQL into statements while ignoring semicolons inside
+	// single/double/backtick quotes and inside SQL comments (line: --, block: /* */).
+	// This is a lightweight tokenizer good enough for our use-case (initialization
+	// statements like SET ...; followed by a main SELECT). It is not a full SQL parser.
+	function splitSqlStatements(sql) {
+		const statements = [];
+		let buf = '';
+		let inSingle = false;
+		let inDouble = false;
+		let inBacktick = false;
+		let inLineComment = false;
+		let inBlockComment = false;
+		for (let i = 0; i < sql.length; i++) {
+			const ch = sql[i];
+			const next = sql[i + 1];
+
+			// Handle entering/exiting comments first
+			if (!inSingle && !inDouble && !inBacktick) {
+				if (!inBlockComment && ch === '-' && next === '-') {
+					inLineComment = true;
+					buf += ch; // keep the chars so statements preserve comments if needed
+					continue;
+				}
+				if (!inLineComment && ch === '/' && next === '*') {
+					inBlockComment = true;
+					buf += ch;
+					continue;
+				}
+			}
+
+			if (inLineComment) {
+				buf += ch;
+				if (ch === '\n') {
+					inLineComment = false;
+				}
+				continue;
+			}
+
+			if (inBlockComment) {
+				buf += ch;
+				if (ch === '*' && next === '/') {
+					buf += next;
+					i++;
+					inBlockComment = false;
+				}
+				continue;
+			}
+
+			// handle quotes
+			if (ch === "'" && !inDouble && !inBacktick) {
+				// SQL escapes single quote by doubling it: ''
+				if (inSingle && next === "'") {
+					// consume escaped quote and keep both
+					buf += "''";
+					i++; // skip next
+					continue;
+				}
+				inSingle = !inSingle;
+				buf += ch;
+				continue;
+			}
+
+			if (ch === '"' && !inSingle && !inBacktick) {
+				// double-quote toggles
+				inDouble = !inDouble;
+				buf += ch;
+				continue;
+			}
+
+			if (ch === '`' && !inSingle && !inDouble) {
+				inBacktick = !inBacktick;
+				buf += ch;
+				continue;
+			}
+
+			// At this point, if we see a semicolon and we're not inside a quote/comment,
+			// treat it as a statement separator.
+			if (ch === ';' && !inSingle && !inDouble && !inBacktick) {
+				const stmt = buf.trim();
+				if (stmt.length > 0) statements.push(stmt);
+				buf = '';
+				continue;
+			}
+
+			buf += ch;
+		}
+		const trailing = buf.trim();
+		if (trailing.length > 0) statements.push(trailing);
+		return statements;
+	}
+
+	// If the provided query contains multiple statements (for example SET ...; SET ...; SELECT ...),
+	// execute all but the final statement as one-off commands so the streaming reader only sees
+	// the final/main statement. This prevents the DuckDB node-api from returning multiple result
+	// sets which later break downstream validation.
+	let mainStatement = queryString;
+	try {
+		const stmts = splitSqlStatements(queryString);
+		if (stmts.length > 1) {
+			// run all prefix statements (everything except the last) synchronously via conn.run
+			for (let i = 0; i < stmts.length - 1; i++) {
+				try {
+					// append semicolon to be explicit, but conn.run accepts statements without it too
+					await conn.run(stmts[i] + ';').catch(() => null);
+				} catch (err) {
+					// ignore initialization errors - downstream query may still succeed
+				}
+			}
+			mainStatement = stmts[stmts.length - 1];
+		}
+	} catch (e) {
+		// If splitting fails for any reason, fall back to using the entire query string.
+		mainStatement = queryString;
+	}
+
 	if (database?.directory) {
 		const contents = await fs.readdir(database.directory);
 		if (contents.find((d) => d === 'initialize.sql')) {
@@ -160,8 +275,9 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		}
 	}
 
-	// Prepare a reader that can stream chunks
-	const count_query = `WITH root as (${cleanQuery(queryString)}) SELECT COUNT(*) FROM root`;
+	// Prepare a reader that can stream chunks. Use the main statement (after running any prefix SETs)
+	// for count/describe/stream operations so we don't accidentally inspect side-effect statements.
+	const count_query = `WITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
 	let expected_row_count = null;
 	try {
 		const countReader = await conn.runAndReadAll(count_query);
@@ -175,7 +291,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		expected_row_count = null;
 	}
 
-	const column_query = `DESCRIBE ${cleanQuery(queryString)}`;
+	const column_query = `DESCRIBE ${cleanQuery(mainStatement)}`;
 	let column_types = null;
 	try {
 		const colReader = await conn.runAndReadAll(column_query);
@@ -187,7 +303,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	}
 
 	// Create an async generator that yields batches using the DuckDBResultReader
-	const reader = await conn.streamAndRead(queryString);
+	const reader = await conn.streamAndRead(mainStatement);
 
 	const rowsAsyncIterable = (async function* () {
 		try {
