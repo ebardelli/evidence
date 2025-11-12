@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import runQuery from '../index.cjs';
 import { batchedAsyncGeneratorToArray, TypeFidelity } from '@evidence-dev/db-commons';
+import fs from 'fs/promises';
 import 'dotenv/config';
 
 test('basic select from needful_things.duckdb', async () => {
@@ -273,11 +274,18 @@ test('semicolon inside block comment should not split statements', async () => {
 
 test('USE statement before query should apply to metadata queries', async () => {
 	try {
- 		// This test uses a USE statement. We can't change databases in this test
- 		// (no additional DB files available), but we can assert that a USE
- 		// statement doesn't break splitting and that the main query still runs.
-		const query = `USE main; select 1 union all select 2;`;
-		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		// Create a temporary on-disk DuckDB file to test that USE affects
+		// subsequent queries in the same session. We create a schema and table
+		// in prefix statements, then USE the schema and select from the table.
+		// Use an in-memory database so we can CREATE schema/table in the test
+		const dbFile = ':memory:';
+		const query = `
+		CREATE SCHEMA s;
+		CREATE TABLE s.t AS SELECT 1 AS x UNION ALL SELECT 2 AS x;
+		USE s;
+		SELECT x FROM t;
+		`;
+		const { rows, expectedRowCount } = await runQuery(query, { filename: dbFile }, 2);
 		const arr = [];
 		for await (const batch of rows()) {
 			arr.push(batch);

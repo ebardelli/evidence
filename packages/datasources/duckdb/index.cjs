@@ -240,11 +240,14 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	try {
 		const stmts = splitSqlStatements(queryString);
 		if (stmts.length > 1) {
-			// run all prefix statements (everything except the last) synchronously via conn.run
+			// run all prefix statements (everything except the last) synchronously and
+			// consume any result sets via runAndReadAll/readAll so the connection's
+			// session state is updated and no hanging result readers remain.
 			for (let i = 0; i < stmts.length - 1; i++) {
 				try {
-					// append semicolon to be explicit
-					await conn.run(stmts[i] + ';');
+					const r = await conn.runAndReadAll(stmts[i] + ';');
+					// Ensure we consume any rows to avoid leaving unconsumed results
+					await r.readAll();
 					executedPrefixStmts.push(stmts[i]);
 				} catch (err) {
 					// ignore initialization errors - downstream query may still succeed
@@ -274,10 +277,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	// metadata queries (count/describe). This ensures those queries inherit any
 	// session-level settings (like SET or USE) even if the underlying API
 	// executes them in a separate session.
-	const prefixSql = executedPrefixStmts.length
-		? executedPrefixStmts.map((s) => (s.trim().endsWith(';') ? s.trim() : s.trim() + ';')).join('\n')
-		: '';
-	const count_query = `${prefixSql}\nWITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
+	const count_query = `WITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
 	let expected_row_count = null;
 	try {
 		const countReader = await conn.runAndReadAll(count_query);
@@ -291,7 +291,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		expected_row_count = null;
 	}
 
-	const column_query = `${prefixSql}\nDESCRIBE ${cleanQuery(mainStatement)}`;
+	const column_query = `DESCRIBE ${cleanQuery(mainStatement)}`;
 	let column_types = null;
 	try {
 		const colReader = await conn.runAndReadAll(column_query);
