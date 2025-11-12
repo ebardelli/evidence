@@ -436,7 +436,25 @@ test('semicolon inside single-quoted string should not split statements', async 
 
 test('semicolon inside block comment should not split statements', async () => {
 	try {
-		const query = "/* comment; still comment; */ select 1 union all select 2;";
+		const query = '/* comment; still comment; */ select 1 union all select 2;';
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		assert.equal(expectedRowCount, 2);
+		assert.equal(arr[0].length, 2);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
+test('USE statement before query should apply to metadata queries', async () => {
+	try {
+ 		// This test uses a USE statement. We can't change databases in this test
+ 		// (no additional DB files available), but we can assert that a USE
+ 		// statement doesn't break splitting and that the main query still runs.
+		const query = `USE main; select 1 union all select 2;`;
 		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
 		const arr = [];
 		for await (const batch of rows()) {

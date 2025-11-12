@@ -242,17 +242,20 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 
 	// If the provided query contains multiple statements (for example SET ...; SET ...; SELECT ...),
 	// execute all but the final statement as one-off commands so the streaming reader only sees
-	// the final/main statement. This prevents the DuckDB node-api from returning multiple result
-	// sets which later break downstream validation.
+	// the final/main statement. Record which prefix statements succeeded so we can include
+	// only those in inline metadata queries (count/describe) to avoid passing invalid
+	// statements into those queries.
 	let mainStatement = queryString;
+	let executedPrefixStmts = [];
 	try {
 		const stmts = splitSqlStatements(queryString);
 		if (stmts.length > 1) {
 			// run all prefix statements (everything except the last) synchronously via conn.run
 			for (let i = 0; i < stmts.length - 1; i++) {
 				try {
-					// append semicolon to be explicit, but conn.run accepts statements without it too
-					await conn.run(stmts[i] + ';').catch(() => null);
+					// append semicolon to be explicit
+					await conn.run(stmts[i] + ';');
+					executedPrefixStmts.push(stmts[i]);
 				} catch (err) {
 					// ignore initialization errors - downstream query may still succeed
 				}
@@ -277,7 +280,14 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 
 	// Prepare a reader that can stream chunks. Use the main statement (after running any prefix SETs)
 	// for count/describe/stream operations so we don't accidentally inspect side-effect statements.
-	const count_query = `WITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
+	// If we executed prefix statements, also include them inline when running
+	// metadata queries (count/describe). This ensures those queries inherit any
+	// session-level settings (like SET or USE) even if the underlying API
+	// executes them in a separate session.
+	const prefixSql = executedPrefixStmts.length
+		? executedPrefixStmts.map((s) => (s.trim().endsWith(';') ? s.trim() : s.trim() + ';')).join('\n')
+		: '';
+	const count_query = `${prefixSql}\nWITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
 	let expected_row_count = null;
 	try {
 		const countReader = await conn.runAndReadAll(count_query);
@@ -291,7 +301,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		expected_row_count = null;
 	}
 
-	const column_query = `DESCRIBE ${cleanQuery(mainStatement)}`;
+	const column_query = `${prefixSql}\nDESCRIBE ${cleanQuery(mainStatement)}`;
 	let column_types = null;
 	try {
 		const colReader = await conn.runAndReadAll(column_query);
@@ -332,7 +342,8 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	})();
 
 	const results = await asyncIterableToBatchedAsyncGenerator(rowsAsyncIterable, batchSize, {
-		mapResultsToEvidenceColumnTypes: column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
+		mapResultsToEvidenceColumnTypes:
+			column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
 		standardizeRow,
 		closeConnection: () => {
 			try {
