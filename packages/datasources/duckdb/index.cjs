@@ -274,8 +274,16 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	// metadata queries (count/describe). This ensures those queries inherit any
 	// session-level settings (like SET or USE) even if the underlying API
 	// executes them in a separate session.
+	// If we executed prefix statements (e.g. SET / USE), we need to include them
+	// before the metadata queries so they run in the same SQL batch. Some session
+	// settings only take effect when executed in the same statement batch used
+	// for metadata inspection. Construct `prefixSql` from the successfully
+	// executed prefix statements; each statement is ensured to end with a
+	// semicolon to form a valid multi-statement SQL string.
 	const prefixSql = executedPrefixStmts.length
-		? executedPrefixStmts.map((s) => (s.trim().endsWith(';') ? s.trim() : s.trim() + ';')).join('\n')
+		? executedPrefixStmts
+				.map((s) => (s.trim().endsWith(';') ? s.trim() : s.trim() + ';'))
+				.join('\n')
 		: '';
 	const count_query = `${prefixSql}\nWITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
 	let expected_row_count = null;
