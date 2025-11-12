@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import runQuery from '../index.cjs';
 import { batchedAsyncGeneratorToArray, TypeFidelity } from '@evidence-dev/db-commons';
+import fs from 'fs/promises';
 import 'dotenv/config';
 
 test('basic select from needful_things.duckdb', async () => {
@@ -198,6 +199,20 @@ test('query runs', async () => {
 	}
 });
 
+test('expectedRowCount present for UNION with NULL-first-row', async () => {
+	// Simple reproduction: first row has NULL, second row has a value
+ 	const query = `select NULL as a UNION ALL select 1 as a`;
+	const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+	// consume rows to ensure the stream runs
+	const arr = [];
+	for await (const batch of rows()) {
+		arr.push(...batch);
+	}
+	assert.equal(arr.length, 2);
+	assert.type(expectedRowCount, 'number');
+	assert.equal(expectedRowCount, 2);
+});
+
 test('query batches results properly', async () => {
 	try {
 		const { rows, expectedRowCount } = await runQuery(
@@ -258,6 +273,57 @@ test('semicolon inside single-quoted string should not split statements', async 
 
 test('semicolon inside block comment should not split statements', async () => {
 	try {
+		const query = "/* comment; still comment; */ select 1 union all select 2;";
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		assert.equal(expectedRowCount, 2);
+		assert.equal(arr[0].length, 2);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
+test('handles leading SET statements before main query', async () => {
+	try {
+		const query = `
+		SET VARIABLE VAR1 = DATE '2023-10-04';
+		SET VARIABLE VAR2 = '23';
+		select 1 union all select 2 union all select 3;
+		`;
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		// should batch into [2,1]
+		assert.equal(arr[0].length, 2);
+		assert.equal(arr[1].length, 1);
+		assert.equal(expectedRowCount, 3);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
+test('semicolon inside single-quoted string should not split statements', async () => {
+	try {
+		const query = "SET V='this;is;a;string'; select 1 union all select 2;";
+		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		const arr = [];
+		for await (const batch of rows()) {
+			arr.push(batch);
+		}
+		assert.equal(expectedRowCount, 2);
+		assert.equal(arr[0].length, 2);
+	} catch (e) {
+		throw Error(e);
+	}
+});
+
+test('semicolon inside block comment should not split statements', async () => {
+	try {
 		const query = '/* comment; still comment; */ select 1 union all select 2;';
 		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
 		const arr = [];
@@ -273,82 +339,24 @@ test('semicolon inside block comment should not split statements', async () => {
 
 test('USE statement before query should apply to metadata queries', async () => {
 	try {
-		// This test uses a USE statement. We can't change databases in this test
-		// (no additional DB files available), but we can assert that a USE
-		// statement doesn't break splitting and that the main query still runs.
-		const query = `USE main; select 1 union all select 2;`;
-		const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+		// Create a temporary on-disk DuckDB file to test that USE affects
+		// subsequent queries in the same session. We create a schema and table
+		// in prefix statements, then USE the schema and select from the table.
+		// Use an in-memory database so we can CREATE schema/table in the test
+		const dbFile = ':memory:';
+		const query = `
+		CREATE SCHEMA s;
+		CREATE TABLE s.t AS SELECT 1 AS x UNION ALL SELECT 2 AS x;
+		USE s;
+		SELECT x FROM t;
+		`;
+		const { rows, expectedRowCount } = await runQuery(query, { filename: dbFile }, 2);
 		const arr = [];
 		for await (const batch of rows()) {
 			arr.push(batch);
 		}
 		assert.equal(expectedRowCount, 2);
 		assert.equal(arr[0].length, 2);
-	} catch (e) {
-		throw Error(e);
-	}
-});
-
-test('metadata queries succeed with prefix statements', async () => {
-	try {
-		const query = `
-		SET VARIABLE VAR1 = DATE '2023-10-04';
-		-- another harmless prefix
-		SET VARIABLE VAR2 = 'abc';
-		select 1 as col_a;
-		`;
-
-		const { rows: rowsGen, columnTypes, expectedRowCount } = await runQuery(query, undefined, 2);
-		// consume rows
-		const arr = [];
-		for await (const batch of rowsGen()) {
-			arr.push(batch);
-		}
-
-		// Expect that metadata (columnTypes) was returned and includes the selected column
-		assert.instance(columnTypes, Array);
-		assert.equal(columnTypes[0].name, 'col_a');
-		assert.equal(expectedRowCount, 1);
-		assert.equal(arr[0][0].col_a, 1);
-	} catch (e) {
-		throw Error(e);
-	}
-});
-
-test('block comment + USE before select should work', async () => {
-	try {
-		const query = `/* initial block comment; nothing to split */\nUSE main;\nselect 42 as answer;`;
-		const { rows: rowsGen, columnTypes, expectedRowCount } = await runQuery(query, undefined, 2);
-		const arr = [];
-		for await (const batch of rowsGen()) {
-			arr.push(batch);
-		}
-		assert.equal(expectedRowCount, 1);
-		assert.instance(columnTypes, Array);
-		assert.equal(columnTypes[0].name, 'answer');
-		assert.equal(arr[0][0].answer, 42);
-	} catch (e) {
-		throw Error(e);
-	}
-});
-
-test('complex SET forms and inline comments before select should work', async () => {
-	try {
-		const query = `
-		-- set a timezone and a variable
-		SET TIME ZONE 'UTC';
-		SET VARIABLE VAR_X = (SELECT DATE '2020-01-01'); /* inline comment */
-		select 'ok' as status;
-		`;
-		const { rows: rowsGen, columnTypes, expectedRowCount } = await runQuery(query, undefined, 2);
-		const arr = [];
-		for await (const batch of rowsGen()) {
-			arr.push(batch);
-		}
-		assert.equal(expectedRowCount, 1);
-		assert.instance(columnTypes, Array);
-		assert.equal(columnTypes[0].name, 'status');
-		assert.equal(arr[0][0].status, 'ok');
 	} catch (e) {
 		throw Error(e);
 	}

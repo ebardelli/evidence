@@ -3,11 +3,13 @@ const {
 	TypeFidelity,
 	asyncIterableToBatchedAsyncGenerator,
 	cleanQuery,
-	exhaustStream
+	exhaustStream,
+	splitSQLStatements
 } = require('@evidence-dev/db-commons');
 const { DuckDBInstance } = require('@duckdb/node-api');
 const path = require('path');
 const fs = require('fs/promises');
+
 
 /**
  * Converts BigInt values to Numbers in an object.
@@ -139,124 +141,6 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	});
 	const conn = await db.connect();
 
-	// Helper: split SQL into statements while ignoring semicolons inside
-	// single/double/backtick quotes and inside SQL comments (line: --, block: /* */).
-	// This is a lightweight tokenizer good enough for our use-case (initialization
-	// statements like SET ...; followed by a main SELECT). It is not a full SQL parser.
-	function splitSqlStatements(sql) {
-		const statements = [];
-		let buf = '';
-		let inSingle = false;
-		let inDouble = false;
-		let inBacktick = false;
-		let inLineComment = false;
-		let inBlockComment = false;
-		for (let i = 0; i < sql.length; i++) {
-			const ch = sql[i];
-			const next = sql[i + 1];
-
-			// Handle entering/exiting comments first
-			if (!inSingle && !inDouble && !inBacktick) {
-				if (!inBlockComment && ch === '-' && next === '-') {
-					inLineComment = true;
-					buf += ch; // keep the chars so statements preserve comments if needed
-					continue;
-				}
-				if (!inLineComment && ch === '/' && next === '*') {
-					inBlockComment = true;
-					buf += ch;
-					continue;
-				}
-			}
-
-			if (inLineComment) {
-				buf += ch;
-				if (ch === '\n') {
-					inLineComment = false;
-				}
-				continue;
-			}
-
-			if (inBlockComment) {
-				buf += ch;
-				if (ch === '*' && next === '/') {
-					buf += next;
-					i++;
-					inBlockComment = false;
-				}
-				continue;
-			}
-
-			// handle quotes
-			if (ch === "'" && !inDouble && !inBacktick) {
-				// SQL escapes single quote by doubling it: ''
-				if (inSingle && next === "'") {
-					// consume escaped quote and keep both
-					buf += "''";
-					i++; // skip next
-					continue;
-				}
-				inSingle = !inSingle;
-				buf += ch;
-				continue;
-			}
-
-			if (ch === '"' && !inSingle && !inBacktick) {
-				// double-quote toggles
-				inDouble = !inDouble;
-				buf += ch;
-				continue;
-			}
-
-			if (ch === '`' && !inSingle && !inDouble) {
-				inBacktick = !inBacktick;
-				buf += ch;
-				continue;
-			}
-
-			// At this point, if we see a semicolon and we're not inside a quote/comment,
-			// treat it as a statement separator.
-			if (ch === ';' && !inSingle && !inDouble && !inBacktick) {
-				const stmt = buf.trim();
-				if (stmt.length > 0) statements.push(stmt);
-				buf = '';
-				continue;
-			}
-
-			buf += ch;
-		}
-		const trailing = buf.trim();
-		if (trailing.length > 0) statements.push(trailing);
-		return statements;
-	}
-
-	// If the provided query contains multiple statements (for example SET ...; SET ...; SELECT ...),
-	// execute all but the final statement as one-off commands so the streaming reader only sees
-	// the final/main statement. Record which prefix statements succeeded so we can include
-	// only those in inline metadata queries (count/describe) to avoid passing invalid
-	// statements into those queries.
-	let mainStatement = queryString;
-	let executedPrefixStmts = [];
-	try {
-		const stmts = splitSqlStatements(queryString);
-		if (stmts.length > 1) {
-			// run all prefix statements (everything except the last) synchronously via conn.run
-			for (let i = 0; i < stmts.length - 1; i++) {
-				try {
-					// append semicolon to be explicit
-					await conn.run(stmts[i] + ';');
-					executedPrefixStmts.push(stmts[i]);
-				} catch (err) {
-					// ignore initialization errors - downstream query may still succeed
-				}
-			}
-			mainStatement = stmts[stmts.length - 1];
-		}
-	} catch (e) {
-		// If splitting fails for any reason, fall back to using the entire query string.
-		mainStatement = queryString;
-	}
-
 	if (database?.directory) {
 		const contents = await fs.readdir(database.directory);
 		if (contents.find((d) => d === 'initialize.sql')) {
@@ -268,65 +152,78 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		}
 	}
 
-	// Prepare a reader that can stream chunks. Use the main statement (after running any prefix SETs)
-	// for count/describe/stream operations so we don't accidentally inspect side-effect statements.
-	// If we executed prefix statements, also include them inline when running
-	// metadata queries (count/describe). This ensures those queries inherit any
-	// session-level settings (like SET or USE) even if the underlying API
-	// executes them in a separate session.
-	// If we executed prefix statements (e.g. SET / USE), we need to include them
-	// before the metadata queries so they run in the same SQL batch. Some session
-	// settings only take effect when executed in the same statement batch used
-	// for metadata inspection. Construct `prefixSql` from the successfully
-	// executed prefix statements; each statement is ensured to end with a
-	// semicolon to form a valid multi-statement SQL string.
-	const prefixSql = executedPrefixStmts.length
-		? executedPrefixStmts
-				.map((s) => (s.trim().endsWith(';') ? s.trim() : s.trim() + ';'))
-				.join('\n')
-		: '';
-	const count_query = `${prefixSql}\nWITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`;
+	// Split the incoming SQL into statements and treat all but the last as prefix
+	// statements which should be executed before metadata queries or the main
+	// streaming query. This allows SET/USE/CREATE statements to affect the
+	// session.
+	const statements = splitSQLStatements(queryString);
+	const prefixStatements = statements.slice(0, -1);
+	const mainStatement = statements.length > 0 ? statements[statements.length - 1] : '';
+
+	const count_query = mainStatement
+		? `WITH root as (${cleanQuery(mainStatement)}) SELECT COUNT(*) FROM root`
+		: null;
 	let expected_row_count = null;
 	try {
-		const countReader = await conn.runAndReadAll(count_query);
-		await countReader.readAll();
-		const countRow = countReader.getRowObjectsJS()?.[0];
-		if (countRow) {
-			// take the first value from the row (column name may vary)
-			expected_row_count = Object.values(countRow)[0];
+		// Execute prefix statements first so they apply to the session
+		for (const ps of prefixStatements) {
+			try {
+				await conn.run(ps).catch(() => null);
+			} catch (err) {
+				// ignore errors from prefix statements to mimic existing behavior
+			}
+		}
+
+		if (count_query) {
+			const countReader = await conn.runAndReadAll(count_query);
+			await countReader.readAll();
+			const countRow = countReader.getRowObjectsJS()?.[0];
+			if (countRow) {
+				// take the first value from the row (column name may vary)
+				expected_row_count = Object.values(countRow)[0];
+			}
 		}
 	} catch (e) {
 		expected_row_count = null;
 	}
 
-	const column_query = `${prefixSql}\nDESCRIBE ${cleanQuery(mainStatement)}`;
+	const column_query = mainStatement ? `DESCRIBE ${cleanQuery(mainStatement)}` : null;
 	let column_types = null;
 	try {
-		const colReader = await conn.runAndReadAll(column_query);
-		await colReader.readAll();
-		const describeRows = colReader.getRowObjectsJS();
-		column_types = duckdbDescribeToEvidenceType(describeRows);
+		if (column_query) {
+			const colReader = await conn.runAndReadAll(column_query);
+			await colReader.readAll();
+			const describeRows = colReader.getRowObjectsJS();
+			column_types = duckdbDescribeToEvidenceType(describeRows);
+		}
 	} catch (e) {
 		column_types = null;
 	}
 
 	// Create an async generator that yields batches using the DuckDBResultReader
-	const reader = await conn.streamAndRead(mainStatement);
+	// Stream only the main statement (last statement). If there is no main
+	// statement, create an empty generator.
+	let reader = null;
+	if (mainStatement) {
+		reader = await conn.streamAndRead(mainStatement);
+	}
 
 	const rowsAsyncIterable = (async function* () {
 		try {
 			let prev = 0;
-			// keep reading until done
-			while (!reader.done) {
-				const target = prev + batchSize;
-				await reader.readUntil(target);
-				const allRows = reader.getRowObjectsJS();
-				const newRows = allRows.slice(prev).map(standardizeRow);
-				// yield rows one-by-one (asyncIterableToBatchedAsyncGenerator expects single-row yields)
-				for (const r of newRows) {
-					yield r;
+			if (reader) {
+				// keep reading until done
+				while (!reader.done) {
+					const target = prev + batchSize;
+					await reader.readUntil(target);
+					const allRows = reader.getRowObjectsJS();
+					const newRows = allRows.slice(prev).map(standardizeRow);
+					// yield rows one-by-one (asyncIterableToBatchedAsyncGenerator expects single-row yields)
+					for (const r of newRows) {
+						yield r;
+					}
+					prev = reader.currentRowCount;
 				}
-				prev = reader.currentRowCount;
 			}
 		} finally {
 			// disconnect the connection and close the instance synchronously
@@ -340,8 +237,7 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	})();
 
 	const results = await asyncIterableToBatchedAsyncGenerator(rowsAsyncIterable, batchSize, {
-		mapResultsToEvidenceColumnTypes:
-			column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
+		mapResultsToEvidenceColumnTypes: column_types == null ? mapResultsToEvidenceColumnTypes : undefined,
 		standardizeRow,
 		closeConnection: () => {
 			try {
