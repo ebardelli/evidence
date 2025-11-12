@@ -135,6 +135,9 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 		} else if (database.directory) {
 			// Local database stored in source directory
 			filename = path.join(database.directory, database.filename);
+		} else {
+			// filename provided without a directory; use as given (may be absolute or relative)
+			filename = database.filename;
 		}
 	}
 
@@ -195,7 +198,10 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 				await reader.readUntil(target);
 				const allRows = reader.getRowObjectsJS();
 				const newRows = allRows.slice(prev).map(standardizeRow);
-				if (newRows.length > 0) yield newRows;
+				// yield rows one-by-one (asyncIterableToBatchedAsyncGenerator expects single-row yields)
+				for (const r of newRows) {
+					yield r;
+				}
 				prev = reader.currentRowCount;
 			}
 		} finally {
