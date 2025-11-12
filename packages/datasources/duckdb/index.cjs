@@ -176,10 +176,17 @@ const runQuery = async (queryString, database, batchSize = 100000) => {
 	if (column_types != null) {
 		results.columnTypes = column_types;
 	}
-	results.expectedRowCount = expected_row_count;
-	if (typeof results.expectedRowCount === 'bigint') {
-		// newer versions of ddb return a bigint
-		results.expectedRowCount = Number(results.expectedRowCount);
+	// Only set expectedRowCount when the count query returned a non-null/undefined value.
+	// Some DuckDB responses (especially with unions) may return `null` which fails
+	// downstream Zod validation that expects a number or undefined.
+	if (expected_row_count != null) {
+		// newer versions of duckdb may return a bigint
+		if (typeof expected_row_count === 'bigint') {
+			results.expectedRowCount = Number(expected_row_count);
+		} else {
+			// coerce numeric-like results to Number
+			results.expectedRowCount = Number(expected_row_count);
+		}
 	}
 
 	return results;

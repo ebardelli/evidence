@@ -345,6 +345,20 @@ test('handles nulls in first row', async () => {
 	}
 });
 
+test('expectedRowCount present for UNION with NULL-first-row', async () => {
+	// Simple reproduction: first row has NULL, second row has a value
+ 	const query = `select NULL as a UNION ALL select 1 as a`;
+	const { rows, expectedRowCount } = await runQuery(query, undefined, 2);
+	// consume rows to ensure the stream runs
+	const arr = [];
+	for await (const batch of rows()) {
+		arr.push(...batch);
+	}
+	assert.equal(arr.length, 2);
+	assert.type(expectedRowCount, 'number');
+	assert.equal(expectedRowCount, 2);
+});
+
 test('query batches results properly', async () => {
 	try {
 		const { rows, expectedRowCount } = await runQuery(
