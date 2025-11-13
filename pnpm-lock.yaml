@@ -1270,8 +1270,8 @@ importers:
   packages/lib/universal-sql:
     dependencies:
       '@duckdb/duckdb-wasm':
-        specifier: ^1.31.1-dev1.0
-        version: 1.31.1-dev1.0
+        specifier: ^1.30.0
+        version: 1.30.0
       apache-arrow:
         specifier: 17.0.0
         version: 17.0.0
@@ -3840,8 +3840,8 @@ packages:
       apache-arrow: 17.0.0
     dev: true
 
-  /@duckdb/duckdb-wasm@1.31.1-dev1.0:
-    resolution: {integrity: sha512-q2QiJ7I+D9reSSmHeI+J5nMldeH4xUtYMuFJfzEhyiddsAsH2omF7oqWjC6JyVTodsaCfFx9rtfEvBHxa5IXcg==}
+  /@duckdb/duckdb-wasm@1.30.0:
+    resolution: {integrity: sha512-9aWrm+4ayl4sTlvGtl/b+LxrUyXaac3yyVqkoJ3F7Vkd62PoS8PcQIRJ/KjXBW36LP1CnPY5jjvFyIcTFLtcXA==}
     dependencies:
       apache-arrow: 17.0.0
     dev: false
@@ -3855,6 +3855,14 @@ packages:
   /@duckdb/node-bindings-darwin-arm64@1.4.2-r.1:
     resolution: {integrity: sha512-C4yBI3zBX7iZ9iq8zJDvPatXA+2xM22sg1kX3fx76nG+qTqKtU/dGFVYL7Fx6cBYxBO1ZZ8Y+vjgYb6/bich8A==}
     cpu: [arm64]
+    os: [darwin]
+    requiresBuild: true
+    dev: false
+    optional: true
+
+  /@duckdb/node-bindings-darwin-x64@1.4.2-r.1:
+    resolution: {integrity: sha512-dgTSBuEfWyhymYovsGoRESjqcJuZWwJqla9l89SSsBDrGYcUp+EHsXUF73oUCspzTesT2lOvHrDufO8pKgtudw==}
+    cpu: [x64]
     os: [darwin]
     requiresBuild: true
     dev: false
@@ -3888,6 +3896,7 @@ packages:
     resolution: {integrity: sha512-z0pJCdEnIj0Famkip6w7JZ/A17nm5VcYc6H7isOHXfEnPhBQ9PBusUTFgIzl6+3J8HOFQOv0szJq46zldbsHfQ==}
     optionalDependencies:
       '@duckdb/node-bindings-darwin-arm64': 1.4.2-r.1
+      '@duckdb/node-bindings-darwin-x64': 1.4.2-r.1
       '@duckdb/node-bindings-linux-arm64': 1.4.2-r.1
       '@duckdb/node-bindings-linux-x64': 1.4.2-r.1
       '@duckdb/node-bindings-win32-x64': 1.4.2-r.1
