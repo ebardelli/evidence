@@ -3,6 +3,7 @@ import path from 'path';
 import { ManifestSchema } from './schemas/manifest.schema.js';
 import merge from 'lodash.merge';
 import chalk from 'chalk';
+import { usesDatabaseFile } from '@evidence-dev/universal-sql';
 
 /**
  *
@@ -31,8 +32,19 @@ const safeLoadManifest = async (dataDir) => {
  */
 export const updateManifest = async (updatedManifest, dataDir) => {
 	await fs.mkdir(path.join(dataDir), { recursive: true });
+	const updatedBackend = updatedManifest.backend ?? 'parquet';
+
+	if (usesDatabaseFile(updatedBackend)) {
+		await fs.writeFile(path.join(dataDir, 'manifest.json'), JSON.stringify(updatedManifest));
+		return updatedManifest;
+	}
 
 	const existingManifest = await safeLoadManifest(dataDir);
+	const existingBackend = existingManifest?.backend ?? 'parquet';
+	if (existingManifest && existingBackend !== updatedBackend) {
+		await fs.writeFile(path.join(dataDir, 'manifest.json'), JSON.stringify(updatedManifest));
+		return updatedManifest;
+	}
 
 	const finalManifest = merge({}, existingManifest); // deep clone
 

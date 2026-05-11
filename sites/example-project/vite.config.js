@@ -1,10 +1,22 @@
 import { sveltekit } from '@sveltejs/kit/vite';
-import { sourceQueryHmr, configVirtual, queryDirectoryHmr } from '@evidence-dev/sdk/build/vite';
+import {
+	sourceQueryHmr,
+	configVirtual,
+	queryDirectoryHmr,
+	evidencePlugin
+} from '@evidence-dev/sdk/build/vite';
 import { evidenceThemes } from '@evidence-dev/tailwind/vite-plugin';
 
 /** @type {import('vite').UserConfig} */
 const config = {
-	plugins: [sveltekit(), configVirtual(), sourceQueryHmr(), queryDirectoryHmr, evidenceThemes()],
+	plugins: [
+		sveltekit(),
+		evidenceThemes(),
+		await evidencePlugin(),
+		configVirtual(),
+		sourceQueryHmr(),
+		queryDirectoryHmr
+	],
 	optimizeDeps: {
 		include: ['echarts-stat', 'echarts'],
 		exclude: ['svelte-icons']

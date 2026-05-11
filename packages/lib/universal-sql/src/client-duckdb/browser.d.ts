@@ -34,6 +34,38 @@ export function setParquetURLs(
 ): Promise<void>;
 
 /**
+ * Loads a DuckDB database file into the runtime.
+ * @param {string} url
+ * @param {{ addBasePath?: (path: string) => string }} [opts]
+ * @returns {Promise<void>}
+ */
+export function loadDuckDBDatabase(
+	url: string,
+	opts?: { addBasePath?: (path: string) => string }
+): Promise<void>;
+
+/**
+ * Initializes runtime storage from a manifest payload.
+ * @param {{
+ * 	backend?: 'parquet' | 'duckdb',
+ * 	renderedFiles?: Record<string, string[]>,
+ * 	databaseFile?: { path?: string; url?: string },
+ * 	locatedSchemas?: string[]
+ * }} manifest
+ * @param {{ addBasePath?: (path: string) => string }} [opts]
+ * @returns {Promise<void>}
+ */
+export function initializeFromManifest(
+	manifest?: {
+		backend?: 'parquet' | 'duckdb';
+		renderedFiles?: Record<string, string[]>;
+		databaseFile?: { path?: string; url?: string };
+		locatedSchemas?: string[];
+	},
+	opts?: { addBasePath?: (path: string) => string }
+): Promise<void>;
+
+/**
  * Converts an Apache Arrow table to a Javascript array.
  * @param {import("apache-arrow").Table} table
  * @returns {any[]}

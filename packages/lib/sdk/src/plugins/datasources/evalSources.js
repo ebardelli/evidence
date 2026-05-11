@@ -6,7 +6,7 @@ import { EvidenceError } from '../../lib/EvidenceError.js';
 import { loadSourcePlugins } from './loadSourcePlugins.js';
 import { loadSources } from './loadSources.js';
 import { wrapSimpleConnector } from './wrapSimpleConnector.js';
-import { buildMultipartParquet } from '@evidence-dev/universal-sql';
+import { createStorageBackend } from '@evidence-dev/universal-sql';
 import { buildSourceDirectoryProxy } from './buildSourceDirectoryProxy.js';
 import { addToCache, checkCache, flushCache, loadCache } from './SourceResultCache.js';
 import ora from 'ora';
@@ -40,13 +40,61 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 		pluginLoader.succeed();
 	}
 
+	// Determine storage mode from first source
+	const storageMode =
+		sources.length > 0 ? (sources[0].buildOptions?.storageMode ?? 'parquet') : 'parquet';
+
+	// Validate all sources use same storage mode
+	for (const source of sources) {
+		const sourceStorageMode = source.buildOptions?.storageMode ?? 'parquet';
+		if (storageMode !== sourceStorageMode) {
+			throw new EvidenceError(
+				'Mixed datasource storage modes are not currently supported. Please use a single buildOptions.storageMode across all sources.'
+			);
+		}
+	}
+
 	/** @type {import('./types.js').Manifest} */
-	const outputManifest = { renderedFiles: {}, locatedFiles: {}, locatedSchemas: [] };
+	const outputManifest = {
+		renderedFiles: {},
+		locatedFiles: {},
+		locatedSchemas: []
+	};
+
+	/** @type {any} */
+	const storageBackend =
+		sources.length > 0
+			? await createStorageBackend(storageMode, {
+					dataPath,
+					metaPath,
+					urlPrefix: dataUrlPrefix ?? '',
+					databaseFilename: 'evidence.duckdb',
+					database: sources[0].buildOptions?.database,
+					token: sources[0].buildOptions?.token,
+					readScalingToken: sources[0].buildOptions?.readScalingToken
+				})
+			: null;
+
+	if (storageBackend?.manifestBackend) {
+		outputManifest.backend = storageBackend.manifestBackend;
+	}
 
 	/** @type {string[]} */
 	const skippedSources = [];
 
 	for (const source of sources) {
+		if (
+			storageBackend &&
+			!storageBackend.capabilities.filteredBuilds &&
+			((filters?.sources && filters.sources.size > 0) ||
+				(filters?.queries && filters.queries.size > 0) ||
+				filters?.only_changed)
+		) {
+			throw new EvidenceError(
+				`${storageBackend.name} storage mode does not yet support filtered or incremental source builds. Please run a full sources build.`
+			);
+		}
+
 		outputManifest.locatedSchemas ??= [];
 		outputManifest.locatedSchemas.push(source.name);
 		if (filters?.sources?.size && !filters?.sources?.has(source.name)) {
@@ -115,6 +163,12 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 				continue;
 			}
 			const table = { ...iterResult.value };
+			const locatedTables = outputManifest.locatedFiles[source.name];
+			const markTableLocated = () => {
+				if (!locatedTables.includes(table.name)) {
+					locatedTables.push(table.name);
+				}
+			};
 			const spinner = ora({
 				prefixText: `  ${table.name}`,
 				spinner: 'triangle',
@@ -122,13 +176,17 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 				interval: 250
 			});
 
-			outputManifest.locatedFiles[source.name].push(table.name);
+			if (!storageBackend?.manifestBackend) {
+				markTableLocated();
+			}
 			spinner.start('Processing...');
 			if (utils.isFiltered(table.name)) {
+				markTableLocated();
 				spinner.info('Skipped');
 				continue;
 			}
 			if (utils.isCached(table.name, table.content)) {
+				markTableLocated();
 				spinner.info('From Cache');
 				logQueryEvent('cache-query', source.type, source.name);
 				continue;
@@ -136,6 +194,12 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 			logQueryEvent('db-query', source.type, source.name, table.name);
 
 			if ('url' in table) {
+				if (!storageBackend?.capabilities.externalUrlTables) {
+					throw new EvidenceError(
+						`Source ${source.name}.${table.name} exposes an external URL result, which is not yet supported in ${storageBackend?.name ?? 'this'} storage mode.`
+					);
+				}
+				markTableLocated();
 				outputManifest.renderedFiles[source.name].push(table.url);
 				continue;
 			}
@@ -144,34 +208,26 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 					spinner.warn('No results returned.');
 					continue;
 				}
-				const outDir = path.join(dataPath, source.name, table.name);
-				await fs.mkdir(outDir, { recursive: true });
-				const tmpDir = path.join(metaPath, source.name, table.name, 'tmp');
-				await fs.mkdir(tmpDir, { recursive: true });
-				const filename = table.name + '.parquet';
-				const writtenRows = await buildMultipartParquet(
-					table.columnTypes,
-					table.rows,
-					tmpDir,
-					outDir,
-					filename,
-					source.buildOptions.batchSize
-				);
-
-				if (writtenRows === false) {
-					throw new EvidenceError('Internal Error', [
-						'No rows were written to the filesystem, but the table claimed to contain rows'
-					]);
+				if (!storageBackend) {
+					throw new EvidenceError('Storage backend was not initialized');
 				}
-				outputManifest.renderedFiles[source.name].push(
-					`${dataUrlPrefix}/${source.name}/${table.name}/${filename}`
-				);
-				await fs.writeFile(
-					path.join(outDir, table.name + '.schema.json'),
-					JSON.stringify(table.columnTypes)
-				);
+
+				/** @type {any} */
+				const writeResult = await storageBackend.writeTable({
+					sourceName: source.name,
+					tableName: table.name,
+					columns: table.columnTypes,
+					data: table.rows,
+					batchSize: source.buildOptions?.batchSize
+				});
+
+				const writtenRows = writeResult.rowCount;
+				if (writeResult.renderedFile) {
+					outputManifest.renderedFiles[source.name].push(writeResult.renderedFile);
+				}
 
 				addToCache(source.name, table.name, table.content);
+				markTableLocated();
 
 				spinner.succeed(`Finished, wrote ${writtenRows} rows.`);
 			} catch (e) {
@@ -197,6 +253,13 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 		}
 	}
 	console.log(chalk.dim('-'.repeat(5)));
+
+	if (storageBackend) {
+		const artifact = await storageBackend.finalize();
+		if (artifact.databaseFile) {
+			outputManifest.databaseFile = artifact.databaseFile;
+		}
+	}
 
 	if (skippedSources.length)
 		console.log(

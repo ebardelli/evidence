@@ -5,6 +5,7 @@ import { ALL_QUERIES_CONTEXT_KEY, QUERIES_CONTEXT_KEY } from '$evidence/contextK
 import { Query } from '@evidence-dev/sdk/usql';
 import { query } from '@evidence-dev/universal-sql/client-duckdb';
 import { derived } from 'svelte/store';
+import { waitForQueryUpdate } from './query-timing.js';
 
 let ssrHookInstalled = false;
 /**
@@ -34,10 +35,7 @@ export const runQuery = (name, sql, opts) => {
 	let initialError = undefined;
 
 	try {
-		if (typeof window === 'undefined') {
-			// SSR
-			if (ssrHookInstalled) initialData = query(sql);
-		} else {
+		if (typeof window !== 'undefined') {
 			const ssrKey = btoa(sql);
 			if (
 				window.__evidence_ssr &&
@@ -96,10 +94,7 @@ export const getQueries = () => {
 				// We want this to be portable to plain svelte projects
 				let initialData = undefined;
 				if (!(k in queries)) {
-					if (typeof window === 'undefined') {
-						// SSR
-						if (ssrHookInstalled) initialData = query(v);
-					} else {
+					if (typeof window !== 'undefined') {
 						const ssrKey = btoa(v);
 
 						if (
@@ -122,15 +117,7 @@ export const getQueries = () => {
 				});
 
 				if (queries[k]?.hash !== newStore.hash) {
-					updates.push(
-						// Loading states appear after 500ms
-						Promise.race([
-							newStore.fetch(),
-							new Promise((r) => {
-								setTimeout(r, 500);
-							})
-						]).then(() => (queries[k] = newStore))
-					);
+					updates.push(waitForQueryUpdate(newStore.fetch()).then(() => (queries[k] = newStore)));
 					// Has updated
 					queries[k] = newStore;
 				}

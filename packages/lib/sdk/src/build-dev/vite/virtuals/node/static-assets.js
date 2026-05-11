@@ -3,7 +3,9 @@ import path from 'path';
 
 const inTemplate = process.cwd().includes(path.join('.evidence', 'template'));
 const evidenceDirectory = inTemplate ? '..' : '.evidence';
-const dataDirectory = path.resolve(evidenceDirectory, 'data');
+const dataDirectory = inTemplate
+	? path.resolve('static', 'data')
+	: path.resolve(evidenceDirectory, 'data');
 
 /**
  * @param {"browser" | "node"} [dest = "node"]
@@ -11,7 +13,8 @@ const dataDirectory = path.resolve(evidenceDirectory, 'data');
 export const getManifest = (dest = 'node') => {
 	// TODO: Does this need to be sync? Would simplify types if not
 	try {
-		const manifestContent = fs.readFileSync(path.join(dataDirectory, 'manifest.json'), 'utf-8');
+		const manifestPath = path.join(dataDirectory, 'manifest.json');
+		const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
 		/** @type {import('../../../../plugins/datasources/types.js').Manifest} */
 		const manifest = JSON.parse(manifestContent);
 
@@ -44,6 +47,14 @@ export const getManifest = (dest = 'node') => {
 				})
 			);
 			manifest.renderedFiles = renderedFiles;
+
+			if (manifest.backend === 'duckdb' && manifest.databaseFile?.url) {
+				if (!manifest.databaseFile.path && !manifest.databaseFile.url.startsWith('http')) {
+					manifest.databaseFile.path = inTemplate
+						? path.resolve(manifest.databaseFile.url)
+						: path.resolve('.evidence', 'template', manifest.databaseFile.url);
+				}
+			}
 		}
 
 		return JSON.stringify(manifest);

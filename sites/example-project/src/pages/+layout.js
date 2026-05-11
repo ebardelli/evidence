@@ -5,7 +5,8 @@ import {
 	setParquetURLs,
 	query as usqlQuery,
 	updateSearchPath,
-	arrowTableToJSON
+	arrowTableToJSON,
+	waitForPendingQueries
 } from '@evidence-dev/universal-sql/client-duckdb';
 import { profile } from '@evidence-dev/component-utilities/profile';
 import { toasts } from '@evidence-dev/component-utilities/stores';
@@ -118,6 +119,10 @@ export const load = async ({ fetch, route, params, url }) => {
 	if ((dev || building) && !browser && !is_dummy_page) {
 		dummy_pages.set(url.pathname, { inputs });
 		await fetch(url);
+		// Wait for any async queries (e.g. MotherDuck) that were kicked off during
+		// the pre-render pass above to finish writing their Arrow cache files before
+		// we attempt to load the prerendered query index.
+		await waitForPendingQueries();
 		dummy_pages.delete(url.pathname);
 	}
 

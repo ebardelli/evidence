@@ -1,23 +1,23 @@
-import {
-	initDB,
-	setParquetURLs,
-	updateSearchPath,
-	query
-} from '@evidence-dev/universal-sql/client-duckdb';
+import { initDB, initializeFromManifest, query } from '@evidence-dev/universal-sql/client-duckdb';
 
 import { getManifest } from '$evidence/static-assets';
 
-export default (async () => {
+const initPromise = (async () => {
+	console.log('[initUsql] Starting initialization');
 	await initDB();
 	let res;
 	// TODO: Optionally take in a filepath and/or URL for the manifest
 	res = await getManifest();
+	console.log('[initUsql] Raw manifest response:', typeof res, res.length, 'bytes');
 	res = JSON.parse(res);
-
-	await setParquetURLs(res.renderedFiles ?? {});
-	await updateSearchPath(Object.keys(res.renderedFiles ?? {}));
-	if (!res.renderedFiles) console.error('No fixture data available!');
+	console.log('[initUsql] Manifest backend:', res.backend);
+	await initializeFromManifest(res);
+	if (!res.databaseFile && !res.renderedFiles) console.error('No fixture data available!');
 	// Test Query
-	await query('SELECT * FROM information_schema.tables');
+	console.log('[initUsql] Running test query');
+	const testResult = await query('SELECT * FROM information_schema.tables');
+	console.log('[initUsql] Universal SQL initialized, found', testResult.length, 'tables');
 	console.log('Universal SQL has been initialized successfully');
 })();
+
+export default initPromise;

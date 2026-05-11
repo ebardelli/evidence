@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { buildStorageBackendOptionsSchema } from '@evidence-dev/universal-sql';
 
 /** @typedef {z.infer<typeof DatasourceSpecFileSchema>} DatasourceSpec */
 
@@ -7,20 +8,15 @@ export const DatasourceSpecFileSchema = z
 		type: z.string(),
 		name: z.string().refine((s) => s?.toString().match(/^[a-zA-Z0-9_-]+$/)?.length),
 		options: z.any(),
-		buildOptions: z
-			.object({
-				batchSize: z
-					.number()
-					.min(1)
-					.optional()
-					.default(1000 * 1000)
+		buildOptions: buildStorageBackendOptionsSchema(z)
+			.extend({
+				batchSize: z.number().min(1).optional()
 			})
 			.optional()
-			.default({})
 	})
 	.transform((datasource) => ({
 		...datasource,
-		environmentVariables: getDatasourceEnvironmentVariables(datasource.name)
+		environmentVariables: getDatasourceEnvironmentVariables(/** @type {string} */ (datasource.name))
 	}));
 
 const keyRegex = /^EVIDENCE_SOURCE__([a-zA-Z0-9_]+)$/;

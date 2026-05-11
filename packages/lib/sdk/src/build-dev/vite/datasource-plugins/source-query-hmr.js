@@ -5,11 +5,14 @@ import { updateManifest } from '../../../plugins/datasources/updateManifest.js';
 import { ProcessingQueue } from '../../../lib/processing-queue.js';
 import { VITE_EVENTS } from '../constants.js';
 import { debounce } from 'perfect-debounce';
+import { getEvidenceConfig } from '../../../configuration/getEvidenceConfig.js';
 /**
  * @returns {import("vite").Plugin}
  */
 export const sourceQueryHmr = () => {
 	const processingQueue = ProcessingQueue();
+	const configStorageMode = getEvidenceConfig().buildOptions?.storageMode ?? 'parquet';
+	const usesFullBuildMode = ['duckdb', 'motherduck'].includes(configStorageMode);
 
 	/** @type {import('vite').ViteDevServer | undefined} */
 	let server;
@@ -36,16 +39,19 @@ export const sourceQueryHmr = () => {
 		});
 
 		try {
-			const updatedManifest = await evalSources(
-				dataDirectory,
-				metaDirectory,
-				{
-					sources: datasource ? new Set([datasource]) : null,
-					queries: table ? new Set([table]) : null,
-					only_changed: false
-				},
-				true
-			);
+			const filterOptions = usesFullBuildMode
+				? {
+						sources: null,
+						queries: null,
+						only_changed: false
+					}
+				: {
+						sources: datasource ? new Set([datasource]) : null,
+						queries: table ? new Set([table]) : null,
+						only_changed: false
+					};
+
+			const updatedManifest = await evalSources(dataDirectory, metaDirectory, filterOptions, true);
 			latestManifest = await updateManifest(updatedManifest, dataDirectory);
 
 			server?.hot.send(VITE_EVENTS.SOURCE_END, {

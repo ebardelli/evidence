@@ -1,7 +1,15 @@
-import { arrowTableToJSON, getPromise, withTimeout } from './both.js';
+import {
+	arrowTableToJSON,
+	getPromise,
+	withTimeout,
+	getDefaultOpenConfig,
+	getConnectionConfigQueries,
+	createBrowserBackendFactory
+} from './both.js';
 import {
 	AsyncDuckDB,
 	ConsoleLogger,
+	DuckDBAccessMode,
 	DuckDBDataProtocol,
 	getPlatformFeatures,
 	VoidLogger
@@ -19,11 +27,11 @@ const { resolve: resolveInit, reject: rejectInit, promise: initPromise } = getPr
 const { resolve: resolveTables, reject: rejectTables, promise: tablesPromise } = getPromise();
 let initializing = false;
 
-/**
- * Initializes the database.
- *
- * @returns {Promise<void>}
- */
+const defaultOpenConfig = getDefaultOpenConfig();
+
+/** @type {ReturnType<typeof createBrowserBackendFactory>} */
+let backend;
+
 export async function initDB() {
 	// If the database is already available, don't do anything
 	if (db) return;
@@ -59,20 +67,29 @@ export async function initDB() {
 		await _db.instantiate(DUCKDB_CONFIG.mainModule);
 		db = _db;
 
-		await db.open({
-			query: {
-				castBigIntToDouble: true,
-				castTimestampToDate: true,
-				castDecimalToDouble: true,
-				castDurationToTime64: true
-			}
-		});
-		connection = await db.connect();
+		await db.open(defaultOpenConfig);
 
-		// https://duckdb.org/2024/09/09/announcing-duckdb-110.html#breaking-sql-changes
-		await connection.query('SET ieee_floating_point_ops = false;');
-		// https://duckdb.org/2024/02/13/announcing-duckdb-0100.html#breaking-sql-changes
-		await connection.query('SET old_implicit_casting = true;');
+		// Initialize backend after db is ready
+		const connectionRef = { current: null };
+		const context = {
+			db,
+			connectionRef,
+			externalConnectionRef: { current: null },
+			initDB,
+			DuckDBDataProtocol,
+			DuckDBAccessMode,
+			defaultOpenConfig,
+			resolveTables,
+			rejectTables,
+			tablesPromise,
+			backend: null // Will be set after backend is created
+		};
+		backend = createBrowserBackendFactory(context);
+		// Set backend reference in context so it can reference itself
+		context.backend = backend;
+		// Configure connection after backend is created
+		await backend.configureConnection();
+		connection = connectionRef.current;
 
 		resolveInit();
 	} catch (e) {
@@ -87,19 +104,16 @@ export async function initDB() {
  * @returns {Promise<void>}
  */
 export async function updateSearchPath(schemas) {
-	if (!db) await initDB();
-
-	await connection.query(`PRAGMA search_path='${schemas.join(',')}'`);
+	if (!backend) await initDB();
+	return backend.updateSearchPath(schemas);
 }
 
 /**
  * @param {string} targetGlob
  */
 export async function emptyDbFs(targetGlob) {
-	await db.flushFiles();
-	for (const f of await db.globFiles(targetGlob)) {
-		await db.dropFile(f.fileName);
-	}
+	if (!backend) await initDB();
+	return backend.emptyDbFs(targetGlob);
 }
 
 /**
@@ -109,41 +123,36 @@ export async function emptyDbFs(targetGlob) {
  * @returns {Promise<void>}
  */
 export async function setParquetURLs(urls, { append, addBasePath = (x) => x } = {}) {
-	if (!db) await initDB();
-	if (!append) await emptyDbFs('*');
-	if (import.meta.env.VITE_EVIDENCE_DEBUG) console.debug('Updating Parquet URLs');
+	if (!backend) await initDB();
+	return backend.setParquetURLs(urls, { append, addBasePath });
+}
 
-	try {
-		for (const source in urls) {
-			await connection.query(`CREATE SCHEMA IF NOT EXISTS "${source}";`);
-			for (const url of urls[source]) {
-				const table = url.split(/[\\/]/).at(-1).slice(0, -'.parquet'.length);
-				const file_name = `${source}_${table}.parquet`;
-				let path = url;
+/**
+ * Loads a single DuckDB database file into the runtime.
+ * @param {string} url
+ * @param {{ addBasePath?: (path: string) => string }} [opts]
+ * @returns {Promise<void>}
+ */
+export async function loadDuckDBDatabase(url, { addBasePath = (x) => x } = {}) {
+	if (!backend) await initDB();
+	return backend.loadDuckDBDatabase(url, { addBasePath });
+}
 
-				if (!url.startsWith('http') && !url.startsWith('/')) {
-					// URL Needs to be absolute
-					path = `/${url}`;
-				}
-				// Sveltekit doesn't like referencing the static dir expilcitly
-				if (path.startsWith('/static')) path = path.substring(7);
-
-				if (append) {
-					await emptyDbFs(file_name);
-					await emptyDbFs(url);
-				}
-				await db.registerFileURL(file_name, addBasePath(path), DuckDBDataProtocol.HTTP, false);
-				await connection.query(
-					`CREATE OR REPLACE VIEW "${source}"."${table}" AS (SELECT * FROM read_parquet('${file_name}'));`
-				);
-			}
-		}
-		resolveTables();
-	} catch (e) {
-		rejectTables(e);
-		console.error(`Error encountered while updating Parquet URLs`, e);
-		throw e;
-	}
+/**
+ * Initializes runtime storage from a manifest payload.
+ *
+ * @param {{
+ * 	backend?: 'parquet' | 'duckdb',
+ * 	renderedFiles?: Record<string, string[]>,
+ * 	databaseFile?: { path?: string, url?: string },
+ * 	locatedSchemas?: string[]
+ * }} manifest
+ * @param {{ addBasePath?: (path: string) => string }} [opts]
+ * @returns {Promise<void>}
+ */
+export async function initializeFromManifest(manifest = {}, { addBasePath = (x) => x } = {}) {
+	if (!backend) await initDB();
+	return backend.initializeFromManifest(manifest, { addBasePath });
 }
 
 /**
@@ -153,15 +162,15 @@ export async function setParquetURLs(urls, { append, addBasePath = (x) => x } = 
  * @returns {Promise<Record<string, unknown>[]>}
  */
 export async function query(sql) {
-	// After this point, the database has been initialized
-	if (!db) await initDB();
-	// We need to wait for tables to be available
-	await withTimeout(tablesPromise);
-
-	// Now we can safely execute our query
-	const res = await connection.query(sql).then(arrowTableToJSON);
-
-	return res;
+	if (!backend) await initDB();
+	return backend.query(sql);
 }
+
+/**
+ * No-op in browser context — pending query tracking only applies server-side.
+ * Included for API compatibility with the Node backend.
+ * @returns {Promise<void>}
+ */
+export async function waitForPendingQueries() {}
 
 export { arrowTableToJSON };

@@ -5,9 +5,10 @@ export const initUniversalSql = {
 		if (filename?.endsWith('.svelte-kit/generated/root.svelte') && !attributes.context) {
 			return {
 				code: `
-import "$evidence/initUsql"
 import bootstrapContexts from "$evidence/bootstrapContexts.svelte.js"
-bootstrapContexts()
+(async () => {
+	await bootstrapContexts()
+})()
 ${content}`
 			};
 		}

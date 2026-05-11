@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import chalk from 'chalk';
 import { loadSourceConfig } from './loadSourceConfig.js';
 import { sourcesDirectory } from '../../lib/projectPaths.js';
+import { getEvidenceConfig } from '../../configuration/getEvidenceConfig.js';
 
 /**
  *
@@ -18,6 +19,12 @@ const loadSource = async (sourcePath) => {
 	}
 	return loadSourceConfig(sourcePath);
 };
+
+/**
+ * @param {false | (import('./schemas/datasource.schema.js').DatasourceSpec & {dir: string})} source
+ * @returns {source is import('./schemas/datasource.schema.js').DatasourceSpec & {dir: string}}
+ */
+const isLoadedSource = (source) => source !== false;
 
 /**
  * @param {import('ora').Ora} [spinner]
@@ -37,12 +44,22 @@ export const loadSources = async (spinner) => {
 		});
 	}
 
+	// Load app-level buildOptions from evidence.config.yaml
+	const appLevelBuildOptions = getEvidenceConfig().buildOptions ?? {};
+
 	return /** @type {Array<import('./schemas/datasource.schema.js').DatasourceSpec & {dir: string}>}*/ (
 		await Promise.all(
-			sourceDirs.map(async (dir) => ({
-				dir,
-				...(await loadSource(dir))
-			}))
-		).then((sources) => sources.filter((source) => Boolean(source.name)))
+			sourceDirs.map(async (dir) => {
+				const sourceConfig = await loadSource(dir);
+				if (!sourceConfig) return sourceConfig;
+
+				// Use app-level buildOptions exclusively, ignoring any source-level buildOptions
+				return {
+					dir,
+					...sourceConfig,
+					buildOptions: appLevelBuildOptions
+				};
+			})
+		).then((sources) => sources.filter(isLoadedSource))
 	);
 };

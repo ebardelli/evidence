@@ -1,13 +1,21 @@
-import { arrowTableToJSON, getPromise } from './both.js';
+import {
+	arrowTableToJSON,
+	getPromise,
+	getDefaultOpenConfig,
+	getConnectionConfigQueries,
+	createNodeBackendFactory
+} from './both.js';
 import {
 	ConsoleLogger,
 	createDuckDB,
+	DuckDBAccessMode,
 	DuckDBDataProtocol,
 	NODE_RUNTIME,
 	VoidLogger
 } from '@duckdb/duckdb-wasm/dist/duckdb-node-blocking';
 import { createRequire } from 'module';
 import path, { dirname, resolve } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { cache_for_hash, get_arrow_if_sql_already_run } from '../cache-duckdb.js';
 import { withTimeout } from './both.js';
 
@@ -22,14 +30,49 @@ let db;
 /** @type {import("@duckdb/duckdb-wasm/dist/types/src/bindings/connection").DuckDBConnection} */
 let connection;
 
+/** @type {{ current: { close?: () => Promise<void> | void } | null } | null} */
+let activeExternalConnectionRef = null;
+let shutdownHandlersRegistered = false;
+/** @type {Promise<void> | null} */
+let shutdownPromise = null;
+
+/** @type {Set<Promise<any>>} */
+const pendingQueries = new Set();
+
+function registerPendingQuery(promise) {
+	pendingQueries.add(promise);
+	promise.finally(() => pendingQueries.delete(promise));
+}
+
 const { resolve: resolveInit, reject: rejectInit, promise: initPromise } = getPromise();
 let initializing = false;
 
-/**
- * Initializes the database.
- *
- * @returns {Promise<void>}
- */
+const defaultOpenConfig = getDefaultOpenConfig();
+
+/** @type {ReturnType<typeof createNodeBackendFactory>} */
+let backend;
+
+async function closeActiveExternalConnection() {
+	const externalConnection = activeExternalConnectionRef?.current;
+	if (!externalConnection?.close) return;
+	activeExternalConnectionRef.current = null;
+	await externalConnection.close();
+}
+
+function registerShutdownHandlers() {
+	if (shutdownHandlersRegistered || typeof process === 'undefined') return;
+	shutdownHandlersRegistered = true;
+
+	process.once('beforeExit', async () => {
+		if (!shutdownPromise) {
+			shutdownPromise = Promise.allSettled([...pendingQueries])
+				.then(() => closeActiveExternalConnection())
+				.catch(() => {});
+		}
+		await shutdownPromise;
+	});
+}
+
 export async function initDB() {
 	// If the database is already available, don't do anything
 	if (db) return;
@@ -58,20 +101,39 @@ export async function initDB() {
 		// and synchronous database
 		db = await createDuckDB(DUCKDB_BUNDLES, logger, NODE_RUNTIME);
 		await db.instantiate();
-		db.open({
-			query: {
-				castBigIntToDouble: true,
-				castTimestampToDate: true,
-				castDecimalToDouble: true,
-				castDurationToTime64: true
-			}
-		});
-		connection = db.connect();
+		db.open(defaultOpenConfig);
 
-		// https://duckdb.org/2024/09/09/announcing-duckdb-110.html#breaking-sql-changes
-		await connection.query('SET ieee_floating_point_ops = false;');
-		// https://duckdb.org/2024/02/13/announcing-duckdb-0100.html#breaking-sql-changes
-		await connection.query('SET old_implicit_casting = true;');
+		// Initialize backend after db is ready
+		const connectionRef = { current: null };
+		const externalConnectionRef = { current: null };
+		const context = {
+			db,
+			connectionRef,
+			externalConnectionRef,
+			initDB,
+			cache_for_hash,
+			get_arrow_if_sql_already_run,
+			pathSep: path.sep,
+			DuckDBDataProtocol,
+			DuckDBAccessMode,
+			defaultOpenConfig,
+			cwd: process.cwd,
+			isAbsolutePath: path.isAbsolute,
+			resolvePath: path.resolve,
+			existsSync,
+			readFileSync,
+			getBasename: path.basename,
+			registerPendingQuery,
+			backend: null // Will be set after backend is created
+		};
+		activeExternalConnectionRef = externalConnectionRef;
+		registerShutdownHandlers();
+		backend = createNodeBackendFactory(context);
+		// Set backend reference in context so it can reference itself
+		context.backend = backend;
+		// Configure connection after backend is created
+		backend.configureConnection();
+		connection = connectionRef.current;
 
 		resolveInit();
 	} catch (e) {
@@ -85,18 +147,17 @@ export async function initDB() {
  * @param {string[]} schemas
  * @returns {void}
  */
-export function updateSearchPath(schemas) {
-	connection.query(`PRAGMA search_path='${schemas.join(',')}'`);
+export async function updateSearchPath(schemas) {
+	if (!backend) await initDB();
+	return backend.updateSearchPath(schemas);
 }
 
 /**
  * @param {string} targetGlob
  */
 export async function emptyDbFs(targetGlob) {
-	await db.flushFiles();
-	for (const f of db.globFiles(targetGlob)) {
-		await db.dropFile(f.fileName);
-	}
+	if (!backend) await initDB();
+	return backend.emptyDbFs(targetGlob);
 }
 
 /**
@@ -106,32 +167,41 @@ export async function emptyDbFs(targetGlob) {
  * @param {boolean} [append]
  * @returns {void}
  */
-export async function setParquetURLs(urls, append = false) {
-	if (!append) await emptyDbFs('*');
+export async function setParquetURLs(urls, options = false) {
+	if (!backend) await initDB();
+	return backend.setParquetURLs(urls, options);
+}
 
-	const pathDelimiterRegex = /[\\/]/;
-
-	if (process.env.VITE_EVIDENCE_DEBUG) console.log(`Updating Parquet URLs`);
-	for (const source in urls) {
-		connection.query(`CREATE SCHEMA IF NOT EXISTS "${source}";`);
-		for (const url of urls[source]) {
-			const table = url.split(pathDelimiterRegex).at(-1).slice(0, -'.parquet'.length);
-			const file_name = `${source}_${table}.parquet`;
-			if (append) {
-				await emptyDbFs(file_name);
-				await emptyDbFs(url);
-			}
-			db.registerFileURL(
-				file_name,
-				url.split(pathDelimiterRegex).join(path.sep),
-				DuckDBDataProtocol.NODE_FS,
-				false
-			);
-			connection.query(
-				`CREATE OR REPLACE VIEW "${source}"."${table}" AS (SELECT * FROM read_parquet('${file_name}'));`
-			);
-		}
+/**
+ * Loads a single DuckDB database file into the runtime.
+ * @param {string} filePath
+ * @returns {void}
+ */
+export async function loadDuckDBDatabase(filePath, { addBasePath = (x) => x } = {}) {
+	if (!backend) await initDB();
+	try {
+		return await backend.loadDuckDBDatabase(filePath, { addBasePath });
+	} catch (e) {
+		console.error('[loadDuckDBDatabase] Failed to load:', e);
+		throw e;
 	}
+}
+
+/**
+ * Initializes runtime storage from a manifest payload.
+ *
+ * @param {{
+ * 	backend?: 'parquet' | 'duckdb',
+ * 	renderedFiles?: Record<string, string[]>,
+ * 	databaseFile?: { path?: string, url?: string },
+ * 	locatedSchemas?: string[]
+ * }} manifest
+ * @param {{ addBasePath?: (path: string) => string }} [opts]
+ * @returns {Promise<void>}
+ */
+export async function initializeFromManifest(manifest = {}, { addBasePath = (x) => x } = {}) {
+	if (!backend) await initDB();
+	return backend.initializeFromManifest(manifest, { addBasePath });
 }
 
 /**
@@ -142,25 +212,21 @@ export async function setParquetURLs(urls, append = false) {
  * @returns {Record<string, unknown>[]}
  */
 export function query(sql, cache_options) {
-	let result;
-
-	// only cache during build, because
-	// parquet can/will eventually change during dev
-	if (cache_options?.prerendering) {
-		result = get_arrow_if_sql_already_run(sql);
+	if (!backend) {
+		throw new Error('Backend not initialized. Call initDB() first.');
 	}
+	return backend.query(sql, cache_options);
+}
 
-	// TODO: This just fails, where is the process going?
-	// if cache missed, fallback to querying
-	if (!result) {
-		result = connection.query(sql);
-	}
-
-	if (cache_options) {
-		cache_for_hash(sql, result, cache_options);
-	}
-
-	return arrowTableToJSON(result);
+/**
+ * Returns a Promise that resolves when all currently in-flight external
+ * queries have settled. Call this after a pre-render pass to ensure async
+ * query results (and their Arrow cache files) are available before reading
+ * the prerendered query index.
+ * @returns {Promise<PromiseSettledResult<any>[]>}
+ */
+export function waitForPendingQueries() {
+	return Promise.allSettled([...pendingQueries]);
 }
 
 export { arrowTableToJSON };

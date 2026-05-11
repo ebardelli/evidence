@@ -197,4 +197,74 @@ describe('updateManifest', () => {
 			renderedFiles: updatedManifest.renderedFiles
 		});
 	});
+
+	it('should overwrite the manifest for duckdb backends', async () => {
+		const updatedManifest = {
+			backend: 'duckdb',
+			renderedFiles: {},
+			databaseFile: {
+				name: 'evidence.duckdb',
+				url: '/_evidence/query/evidence.duckdb'
+			},
+			locatedFiles: {
+				csv: ['data']
+			},
+			locatedSchemas: ['csv']
+		};
+		const dataDir = '/_evidence';
+		await updateManifest(updatedManifest, dataDir);
+
+		expect(JSON.parse(await fs.readFile(path.join(dataDir, 'manifest.json'), 'utf8'))).toEqual(
+			updatedManifest
+		);
+	});
+
+	it('should overwrite the manifest for motherduck backends', async () => {
+		const updatedManifest = {
+			backend: 'motherduck',
+			renderedFiles: {},
+			databaseFile: {
+				name: 'evidence.motherduck',
+				url: 'md:warehouse?token=test-token'
+			},
+			locatedFiles: {
+				csv: ['data']
+			},
+			locatedSchemas: ['csv']
+		};
+		const dataDir = '/_evidence';
+		await updateManifest(updatedManifest, dataDir);
+
+		expect(JSON.parse(await fs.readFile(path.join(dataDir, 'manifest.json'), 'utf8'))).toEqual(
+			updatedManifest
+		);
+	});
+
+	it('should overwrite the manifest when the backend changes', async () => {
+		const fsManifest = {
+			backend: 'parquet',
+			renderedFiles: {
+				csv: ['/_evidence/query/csv/data.parquet']
+			}
+		};
+		const updatedManifest = {
+			backend: 'duckdb',
+			renderedFiles: {},
+			databaseFile: {
+				name: 'evidence.duckdb',
+				url: '/_evidence/query/evidence.duckdb'
+			},
+			locatedFiles: {},
+			locatedSchemas: []
+		};
+		const dataDir = '/_evidence';
+		await fs.mkdir(path.join(dataDir), { recursive: true });
+		await fs.writeFile(path.join(dataDir, 'manifest.json'), JSON.stringify(fsManifest));
+
+		await updateManifest(updatedManifest, dataDir);
+
+		expect(JSON.parse(await fs.readFile(path.join(dataDir, 'manifest.json'), 'utf8'))).toEqual(
+			updatedManifest
+		);
+	});
 });
