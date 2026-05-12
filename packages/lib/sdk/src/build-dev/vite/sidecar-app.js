@@ -30,6 +30,22 @@ export const getSidecarApp = () => {
 	app.get('/_evidence/prerendered-queries/:query_hash.arrow', (req, res) => {
 		return res.send('Arrow file here!').end();
 	});
+	app.get('/_evidence/query/:filename.duckdb', async (req, res) => {
+		const filepath = path.join(dataDirectory, `${req.params.filename}.duckdb`);
+
+		if (
+			await fs
+				.stat(filepath)
+				.then(() => true)
+				.catch(() => false)
+		) {
+			res.sendFile(filepath, {
+				acceptRanges: true
+			});
+		} else {
+			res.sendStatus(404);
+		}
+	});
 	app.get('/_evidence/query/:schema/:filename.parquet', async (req, res) => {
 		// TODO: Check if the file really exists
 		const filepath = path.join(
