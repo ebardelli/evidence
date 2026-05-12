@@ -2,6 +2,20 @@ import { initDB, initializeFromManifest, query } from '@evidence-dev/universal-s
 
 import { getManifest } from '$evidence/static-assets';
 
+/**
+ * @param {string} path
+ */
+const addBasePath = (path) => {
+	if (path.startsWith('http')) return path;
+	if (/^[^/]*:/.test(path)) return path;
+	const rawBase = import.meta.env.BASE_URL ?? '/';
+	if (!rawBase || rawBase === '/') return path;
+	const base = rawBase.endsWith('/') ? rawBase.slice(0, -1) : rawBase;
+	if (path.startsWith(base)) return path;
+	const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+	return `${base}${normalizedPath}`;
+};
+
 const initPromise = (async () => {
 	console.log('[initUsql] Starting initialization');
 	await initDB();
@@ -11,7 +25,7 @@ const initPromise = (async () => {
 	console.log('[initUsql] Raw manifest response:', typeof res, res.length, 'bytes');
 	res = JSON.parse(res);
 	console.log('[initUsql] Manifest backend:', res.backend);
-	await initializeFromManifest(res);
+	await initializeFromManifest(res, { addBasePath });
 	if (!res.databaseFile && !res.renderedFiles) console.error('No fixture data available!');
 	// Test Query
 	console.log('[initUsql] Running test query');
