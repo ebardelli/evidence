@@ -1,15 +1,16 @@
 import chalk from 'chalk';
 import { createParquetBackend } from './parquet.js';
 import { createDuckDBBackend } from './duckdb.js';
+import { createDuckLakeBackend } from './ducklake.js';
 
-/** @type {readonly ['parquet', 'duckdb']} */
-export const STORAGE_BACKEND_MODES = ['parquet', 'duckdb'];
+/** @type {readonly ['parquet', 'duckdb', 'ducklake', 'motherduck']} */
+export const STORAGE_BACKEND_MODES = ['parquet', 'duckdb', 'ducklake', 'motherduck'];
 
-/** @type {readonly ['parquet', 'duckdb']} */
+/** @type {readonly ['parquet', 'duckdb', 'ducklake', 'motherduck']} */
 export const MANIFEST_BACKEND_MODES = STORAGE_BACKEND_MODES;
 
-/** @type {readonly ['duckdb']} */
-export const DATABASE_FILE_BACKENDS = ['duckdb'];
+/** @type {readonly ['duckdb', 'ducklake', 'motherduck']} */
+export const DATABASE_FILE_BACKENDS = ['duckdb', 'ducklake', 'motherduck'];
 
 /**
  * @param {unknown} backend
@@ -35,6 +36,7 @@ export const usesDatabaseFile = (backend) =>
  * 	metaPath: string,
  * 	urlPrefix: string,
  * 	databaseFilename?: string,
+ * 	ducklakeDataPath?: string,
  * 	database?: string,
  * 	token?: string,
  * 	readScalingToken?: string
@@ -46,6 +48,9 @@ export async function createStorageBackend(storageMode, options) {
 		case 'duckdb':
 			console.log(chalk.green('✔') + ' Setting up duckdb backend');
 			return createDuckDBBackend(options);
+		case 'ducklake':
+			console.log(chalk.green('✔') + ' Setting up ducklake backend');
+			return createDuckLakeBackend(options);
 		case 'parquet':
 		default:
 			console.log(chalk.green('✔') + ' Setting up parquet backend');
@@ -53,4 +58,4 @@ export async function createStorageBackend(storageMode, options) {
 	}
 }
 
-export { createParquetBackend, createDuckDBBackend };
+export { createParquetBackend, createDuckDBBackend, createDuckLakeBackend };

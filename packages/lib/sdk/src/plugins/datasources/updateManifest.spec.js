@@ -240,6 +240,27 @@ describe('updateManifest', () => {
 		);
 	});
 
+	it('should overwrite the manifest for ducklake backends', async () => {
+		const updatedManifest = {
+			backend: 'ducklake',
+			renderedFiles: {},
+			databaseFile: {
+				name: 'evidence.ducklake',
+				url: '/_evidence/query/evidence.ducklake'
+			},
+			locatedFiles: {
+				csv: ['data']
+			},
+			locatedSchemas: ['csv']
+		};
+		const dataDir = '/_evidence';
+		await updateManifest(updatedManifest, dataDir);
+
+		expect(JSON.parse(await fs.readFile(path.join(dataDir, 'manifest.json'), 'utf8'))).toEqual(
+			updatedManifest
+		);
+	});
+
 	it('should overwrite the manifest when the backend changes', async () => {
 		const fsManifest = {
 			backend: 'parquet',

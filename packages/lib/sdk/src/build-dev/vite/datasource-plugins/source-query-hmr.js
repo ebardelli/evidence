@@ -11,8 +11,9 @@ import { getEvidenceConfig } from '../../../configuration/getEvidenceConfig.js';
  */
 export const sourceQueryHmr = () => {
 	const processingQueue = ProcessingQueue();
-	const configStorageMode = getEvidenceConfig().buildOptions?.storageMode ?? 'parquet';
-	const usesFullBuildMode = ['duckdb', 'motherduck'].includes(configStorageMode);
+	const configStorageMode =
+		/** @type {any} */ (getEvidenceConfig().buildOptions)?.storageMode ?? 'parquet';
+	const usesFullBuildMode = ['duckdb', 'ducklake', 'motherduck'].includes(configStorageMode);
 
 	/** @type {import('vite').ViteDevServer | undefined} */
 	let server;

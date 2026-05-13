@@ -10,4 +10,12 @@ describe('buildStorageBackendOptionsSchema', () => {
 
 		expect(result.success).toBeTruthy();
 	});
+
+	it('accepts ducklake storage mode', () => {
+		const result = buildStorageBackendOptionsSchema(z).safeParse({
+			storageMode: 'ducklake'
+		});
+
+		expect(result.success).toBeTruthy();
+	});
 });

@@ -1,11 +1,11 @@
-/** @type {readonly ['parquet', 'duckdb']} */
-export const STORAGE_BACKEND_MODES = ['parquet', 'duckdb'];
+/** @type {readonly ['parquet', 'duckdb', 'ducklake', 'motherduck']} */
+export const STORAGE_BACKEND_MODES = ['parquet', 'duckdb', 'ducklake', 'motherduck'];
 
-/** @type {readonly ['parquet', 'duckdb']} */
+/** @type {readonly ['parquet', 'duckdb', 'ducklake', 'motherduck']} */
 export const MANIFEST_BACKEND_MODES = STORAGE_BACKEND_MODES;
 
-/** @type {readonly ['duckdb']} */
-export const DATABASE_FILE_BACKENDS = ['duckdb'];
+/** @type {readonly ['duckdb', 'ducklake', 'motherduck']} */
+export const DATABASE_FILE_BACKENDS = ['duckdb', 'ducklake', 'motherduck'];
 
 /**
  * @param {unknown} backend

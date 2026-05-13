@@ -140,4 +140,47 @@ describe('evalSources', () => {
 		expect(mocks.addToCache).toHaveBeenCalledTimes(1);
 		expect(mocks.addToCache).toHaveBeenCalledWith('warehouse', 'healthy', 'select * from healthy');
 	});
+
+	it('passes ducklake artifact filename to storage backend creation', async () => {
+		mocks.loadSources.mockResolvedValue([
+			{
+				name: 'warehouse',
+				type: 'duckdb',
+				dir: '/sources/warehouse',
+				options: {},
+				buildOptions: {
+					storageMode: 'ducklake'
+				}
+			}
+		]);
+
+		mocks.createStorageBackend.mockResolvedValue({
+			manifestBackend: 'ducklake',
+			capabilities: {
+				filteredBuilds: false,
+				externalUrlTables: false
+			},
+			writeTable: vi.fn().mockResolvedValue({ rowCount: 1 }),
+			finalize: vi.fn().mockResolvedValue({
+				databaseFile: {
+					name: 'evidence.ducklake',
+					url: '/data/evidence.ducklake'
+				}
+			})
+		});
+		mocks.processSource.mockReturnValue(
+			(async function* () {
+				yield makeTable('healthy');
+			})()
+		);
+
+		await evalSources('/data', '/meta', undefined, false);
+
+		expect(mocks.createStorageBackend).toHaveBeenCalledWith(
+			'ducklake',
+			expect.objectContaining({
+				databaseFilename: 'evidence.ducklake'
+			})
+		);
+	});
 });

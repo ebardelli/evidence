@@ -32,4 +32,15 @@ describe('EvidenceConfigSchema', () => {
 			readScalingToken: 'read-secret'
 		});
 	});
+
+	it('accepts ducklake storage mode', () => {
+		const config = EvidenceConfigSchema.safeParse({
+			plugins: {},
+			buildOptions: {
+				storageMode: 'ducklake'
+			}
+		});
+
+		expect(config.success).toBeTruthy();
+	});
 });

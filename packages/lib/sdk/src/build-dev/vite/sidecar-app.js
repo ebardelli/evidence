@@ -30,8 +30,8 @@ export const getSidecarApp = () => {
 	app.get('/_evidence/prerendered-queries/:query_hash.arrow', (req, res) => {
 		return res.send('Arrow file here!').end();
 	});
-	app.get('/_evidence/query/:filename.duckdb', async (req, res) => {
-		const filepath = path.join(dataDirectory, `${req.params.filename}.duckdb`);
+	app.get('/_evidence/query/:filename.:extension(duckdb|ducklake)', async (req, res) => {
+		const filepath = path.join(dataDirectory, `${req.params.filename}.${req.params.extension}`);
 
 		if (
 			await fs
@@ -67,6 +67,38 @@ export const getSidecarApp = () => {
 		} else {
 			res.sendStatus(404);
 		}
+	});
+
+	app.get('/_evidence/query/*', async (req, res, next) => {
+		const wildcardPath = /** @type {string | undefined} */ ((/** @type {any} */ (req.params))[0]);
+		if (typeof wildcardPath !== 'string' || wildcardPath.length === 0) {
+			next();
+			return;
+		}
+
+		const absoluteDataDirectory = path.resolve(dataDirectory);
+		const requestedFilepath = path.resolve(path.join(absoluteDataDirectory, wildcardPath));
+		if (
+			requestedFilepath !== absoluteDataDirectory &&
+			!requestedFilepath.startsWith(absoluteDataDirectory + path.sep)
+		) {
+			res.sendStatus(404);
+			return;
+		}
+
+		const stat = await fs
+			.stat(requestedFilepath)
+			.then((result) => result)
+			.catch(() => null);
+
+		if (stat?.isFile()) {
+			res.sendFile(requestedFilepath, {
+				acceptRanges: true
+			});
+			return;
+		}
+
+		next();
 	});
 
 	app.get('/_evidence/*', (req, res) => res.sendStatus(404).end());

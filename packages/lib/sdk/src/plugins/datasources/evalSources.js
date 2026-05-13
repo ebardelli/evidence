@@ -62,13 +62,19 @@ export const evalSources = async (dataPath, metaPath, filters, strict) => {
 	};
 
 	/** @type {any} */
+	const databaseFilenameByStorageMode = {
+		duckdb: 'evidence.duckdb',
+		ducklake: 'evidence.ducklake'
+	};
+
+	/** @type {any} */
 	const storageBackend =
 		sources.length > 0
 			? await createStorageBackend(storageMode, {
 					dataPath,
 					metaPath,
 					urlPrefix: dataUrlPrefix ?? '',
-					databaseFilename: 'evidence.duckdb',
+					databaseFilename: databaseFilenameByStorageMode[storageMode] ?? 'evidence.duckdb',
 					database: sources[0].buildOptions?.database,
 					token: sources[0].buildOptions?.token,
 					readScalingToken: sources[0].buildOptions?.readScalingToken
