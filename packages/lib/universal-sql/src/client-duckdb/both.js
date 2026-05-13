@@ -133,7 +133,21 @@ export function withTimeout(p) {
 async function queryExternalConnection(connection, sql) {
 	if (!connection) throw new Error('External connection is not initialized');
 	if (typeof connection.query === 'function') {
-		return connection.query(sql);
+		return await connection.query(sql);
+	}
+	if (typeof connection.runAndReadAll === 'function') {
+		const reader = await connection.runAndReadAll(sql);
+		if (typeof reader?.readAll === 'function') {
+			await reader.readAll();
+		}
+		if (typeof reader?.getRowObjectsJS === 'function') {
+			return reader.getRowObjectsJS();
+		}
+		return [];
+	}
+	if (typeof connection.run === 'function') {
+		await connection.run(sql);
+		return [];
 	}
 	throw new Error('External connection does not expose query method');
 }
@@ -164,8 +178,27 @@ async function clearExternalConnection(context) {
  */
 async function connectExternalIfAvailable(context, pathOrUrl, options = {}) {
 	if (typeof context.createExternalConnection !== 'function') return false;
+	// Normalize separators and leading slashes so equivalent local paths match.
+	const normalizePathIdentity = (value) =>
+		String(value ?? '')
+			.split(/[\\/]/)
+			.join('/')
+			.replace(/^\/+/, '');
+	const targetPath = normalizePathIdentity(pathOrUrl);
+	const currentConnection = context.externalConnectionRef?.current;
+	if (
+		currentConnection &&
+		normalizePathIdentity(currentConnection.sourcePath) === targetPath
+	) {
+		// Reuse existing external connection when targeting the same source.
+		if (typeof options.onConnected === 'function') {
+			await options.onConnected();
+		}
+		return true;
+	}
 	const externalConnection = await context.createExternalConnection(pathOrUrl);
 	if (!externalConnection) return false;
+	// Different source (or first connect): replace previous external connection.
 	await closeExternalConnection(context);
 	context.externalConnectionRef.current = externalConnection;
 	if (typeof options.onConnected === 'function') {
@@ -410,6 +443,68 @@ export function createNodeBackendFactory(context) {
 		},
 		loadDuckDBDatabase: async (filePath, { addBasePath = (x) => x } = {}) => {
 			if (!context.db) await context.initDB();
+			if (isDuckLakePath(filePath)) {
+				if (await connectExternalIfAvailable(context, filePath)) return;
+				await clearExternalConnection(context);
+				await reopenDatabase(
+					{
+						...context.defaultOpenConfig,
+						accessMode: context.DuckDBAccessMode.READ_WRITE
+					},
+					{ reset: true }
+				);
+
+				const normalizedPath = filePath.split(/[\\/]/).join(context.pathSep);
+				const pathCandidates = [normalizedPath];
+				const addRelativeCandidates = (candidatePath) => {
+					pathCandidates.push(context.resolvePath(context.cwd(), candidatePath));
+					pathCandidates.push(context.resolvePath(context.cwd(), '.evidence', candidatePath));
+					pathCandidates.push(
+						context.resolvePath(context.cwd(), '.evidence', 'template', candidatePath)
+					);
+				};
+
+				if (!context.isAbsolutePath(normalizedPath)) {
+					addRelativeCandidates(normalizedPath);
+				} else {
+					const relativeLikePath = normalizedPath.replace(
+						new RegExp(`^\\${context.pathSep}+`),
+						''
+					);
+					if (relativeLikePath && relativeLikePath !== normalizedPath) {
+						addRelativeCandidates(relativeLikePath);
+					}
+				}
+
+				const uniqueCandidates = [...new Set(pathCandidates)];
+				const resolvedPath = uniqueCandidates.find((candidatePath) => context.existsSync(candidatePath));
+				if (!resolvedPath) {
+					throw new Error(
+						`DuckLake catalog file not found for ${filePath}. Tried: ${uniqueCandidates.join(', ')}`
+					);
+				}
+				const absoluteResolvedPath = context.isAbsolutePath(resolvedPath)
+					? resolvedPath
+					: context.resolvePath(context.cwd(), resolvedPath);
+				const catalogFileName = context.getBasename(absoluteResolvedPath) || 'evidence.ducklake';
+				const catalogFileBuffer = new Uint8Array(context.readFileSync(absoluteResolvedPath));
+				context.db.registerFileBuffer(catalogFileName, catalogFileBuffer);
+				const ducklakeDataPath = absoluteResolvedPath.replace(
+					/\.ducklake(?:\?.*|#.*)?$/i,
+					'.ducklake.data'
+				);
+				const attachName = 'evidence_ducklake';
+				try {
+					await context.connectionRef.current.query('INSTALL ducklake;');
+				} catch {}
+				await context.connectionRef.current.query('LOAD ducklake;');
+				await context.connectionRef.current.query(
+					`ATTACH ${toSQLString(catalogFileName)} AS "${attachName}" (TYPE ducklake, DATA_PATH ${toSQLString(ducklakeDataPath)}, OVERRIDE_DATA_PATH true, READ_ONLY);`
+				);
+				await context.connectionRef.current.query(`USE "${attachName}";`);
+				return;
+			}
+
 			if (await connectExternalIfAvailable(context, filePath)) return;
 			await clearExternalConnection(context);
 			const normalizedPath = filePath.split(/[\\/]/).join(context.pathSep);
@@ -456,8 +551,31 @@ export function createNodeBackendFactory(context) {
 		},
 		query: (sql, cache_options) => {
 			if (context.externalConnectionRef?.current) {
-				return queryExternalConnection(context.externalConnectionRef.current, sql);
+				const externalResult = queryExternalConnection(context.externalConnectionRef.current, sql);
+				if (
+					externalResult &&
+					typeof externalResult.then === 'function' &&
+					typeof context.registerPendingQuery === 'function'
+				) {
+					context.registerPendingQuery(externalResult);
+				}
+				return externalResult;
 			}
+			const cacheResult = (value) => {
+				if (!cache_options) return;
+				try {
+					context.cache_for_hash(sql, value, cache_options);
+				} catch (cacheError) {
+					try {
+						context.cache_for_hash(sql, undefined, cache_options);
+					} catch {}
+					console.warn(
+						`Failed to cache query result for ${cache_options.query_name}: ${
+							cacheError instanceof Error ? cacheError.message : String(cacheError)
+						}`
+					);
+				}
+			};
 			let result;
 			if (cache_options?.prerendering) {
 				result = context.get_arrow_if_sql_already_run(sql);
@@ -473,7 +591,7 @@ export function createNodeBackendFactory(context) {
 				}
 			}
 			if (cache_options) {
-				context.cache_for_hash(sql, result, cache_options);
+				cacheResult(result);
 			}
 			return arrowTableToJSON(result);
 		}
@@ -607,7 +725,7 @@ export function createBrowserBackendFactory(context) {
 				} catch {}
 				await context.connectionRef.current.query('LOAD ducklake;');
 				await context.connectionRef.current.query(
-					`ATTACH ${toSQLString(resolvedPath)} AS "${attachName}" (TYPE ducklake, DATA_PATH ${toSQLString(ducklakeDataPath)}, OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true);`
+					`ATTACH ${toSQLString(resolvedPath)} AS "${attachName}" (TYPE ducklake, DATA_PATH ${toSQLString(ducklakeDataPath)}, OVERRIDE_DATA_PATH true, READ_ONLY);`
 				);
 				await context.connectionRef.current.query(`USE "${attachName}";`);
 				context.resolveTables();

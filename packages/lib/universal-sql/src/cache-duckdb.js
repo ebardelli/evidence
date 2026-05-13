@@ -12,7 +12,7 @@ import { dirname } from 'path';
 const require1 = createRequire(import.meta.url);
 const require = createRequire(require1.resolve('@duckdb/duckdb-wasm'));
 
-const { tableToIPC, tableFromIPC } = require('apache-arrow');
+const { tableToIPC, tableFromIPC, tableFromArrays } = require('apache-arrow');
 // blocking duckdb-wasm uses cjs and need to have same Table declaration for instanceof
 
 /*
@@ -76,10 +76,19 @@ export function cache_for_hash(
 ) {
 	// if the it's in the cache then we shouldn't bother
 	let ipc_table_hash = sql_string_cache.get(sql_string);
+	let ipc_table;
+
+	try {
+		ipc_table = tableToIPC(data ?? tableFromArrays({}));
+	} catch {
+		// When a query fails we still want to persist an empty result so the
+		// app can surface the original query error without the Arrow writer
+		// crashing the build.
+		ipc_table = tableToIPC(tableFromArrays({}));
+	}
 
 	// this can only be false during `prerendering`
 	if (!sql_string_cache.has(sql_string)) {
-		const ipc_table = tableToIPC(data);
 		ipc_table_hash = hash(ipc_table);
 
 		// write the data to cache

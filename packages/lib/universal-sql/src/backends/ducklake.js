@@ -46,6 +46,97 @@ async function loadDuckDBNodeDependencies() {
 	duckDbImportsLoaded = true;
 }
 
+/**
+ * @param {any} connection
+ * @param {string} sql
+ */
+async function queryNodeConnection(connection, sql) {
+	const normalizedSql = String(sql).trim();
+	const sqlWithoutLeadingLineComments = normalizedSql.replace(/^(?:\s*--[^\n]*\n)*/g, '').trim();
+	const isReadQuery = /^(SELECT|WITH|PRAGMA|DESCRIBE|SHOW|EXPLAIN|VALUES)\b/i.test(
+		sqlWithoutLeadingLineComments
+	);
+
+	try {
+		if (isReadQuery && typeof connection?.runAndReadAll === 'function') {
+			const reader = await connection.runAndReadAll(sql);
+			if (typeof reader?.readAll === 'function') {
+				await reader.readAll();
+			}
+			if (typeof reader?.getRowObjectsJS === 'function') {
+				return reader.getRowObjectsJS();
+			}
+			return [];
+		}
+
+		if (!isReadQuery && typeof connection?.run === 'function') {
+			await connection.run(sql);
+			return [];
+		}
+
+		if (typeof connection?.runAndReadAll === 'function') {
+			const reader = await connection.runAndReadAll(sql);
+			if (typeof reader?.readAll === 'function') {
+				await reader.readAll();
+			}
+			if (typeof reader?.getRowObjectsJS === 'function') {
+				return reader.getRowObjectsJS();
+			}
+			return [];
+		}
+
+		if (typeof connection?.query === 'function') {
+			return await connection.query(sql);
+		}
+
+		if (typeof connection?.run === 'function') {
+			await connection.run(sql);
+			return [];
+		}
+	} catch (error) {
+		throw normalizeNodeApiError(error);
+	}
+
+	throw new Error('DuckDB node connection does not expose query, runAndReadAll, or run methods');
+}
+
+/**
+ * @param {unknown} error
+ */
+function normalizeNodeApiError(error) {
+	if (error instanceof Error) {
+		const normalized = new Error(error.message);
+		normalized.name = error.name || 'Error';
+		if (error.stack) normalized.stack = error.stack;
+		return normalized;
+	}
+	return new Error(String(error));
+}
+
+/**
+ * @param {any} connection
+ */
+async function safelyDisconnectConnection(connection) {
+	if (!connection) return;
+	try {
+		if (typeof connection.disconnect === 'function') {
+			await connection.disconnect();
+		}
+	} catch {}
+}
+
+/**
+ * @param {any} db
+ */
+async function safelyCloseDb(db) {
+	if (!db) return;
+	try {
+		if (typeof db.close === 'function') {
+			await db.close();
+		}
+	} catch {}
+}
+
 
 async function loadParquetWriterDependencies() {
 	if (parquetWriterImportsLoaded) return;
@@ -247,39 +338,15 @@ function resultsToIPC(columns, results) {
  */
 async function loadDuckLakeExtension(connection) {
 	try {
-		await connection.run('INSTALL ducklake;');
+		await queryNodeConnection(connection, 'INSTALL ducklake;');
 	} catch {}
-	await connection.run('LOAD ducklake;');
+	await queryNodeConnection(connection, 'LOAD ducklake;');
 }
 
 /**
  * @param {any} connection
  * @param {string} sql
  */
-async function queryNodeConnection(connection, sql) {
-	if (typeof connection?.query === 'function') {
-		return connection.query(sql);
-	}
-
-	if (typeof connection?.runAndReadAll === 'function') {
-		const reader = await connection.runAndReadAll(sql);
-		if (typeof reader?.readAll === 'function') {
-			await reader.readAll();
-		}
-		if (typeof reader?.getRowObjectsJS === 'function') {
-			return reader.getRowObjectsJS();
-		}
-		return [];
-	}
-
-	if (typeof connection?.run === 'function') {
-		await connection.run(sql);
-		return [];
-	}
-
-	throw new Error('DuckDB node connection does not expose query, runAndReadAll, or run methods');
-}
-
 /**
  * @param {{
  *  outputFilepath: string,
@@ -311,14 +378,16 @@ export async function createDuckLakeBuilder({ outputFilepath, localDataPath, rem
 	const remoteDataPathSQL = toSQLString(remoteDataPath);
 	const localDataPathSQL = toSQLString(toDuckDBPath(resolvedLocalDataPath));
 
-	await connection.run(
+	await queryNodeConnection(
+		connection,
 		`ATTACH ${catalogPathSQL} AS ${attachIdentifier} (TYPE ducklake, DATA_PATH ${remoteDataPathSQL});`
 	);
-	await connection.run(`DETACH ${attachIdentifier};`);
-	await connection.run(
+	await queryNodeConnection(connection, `DETACH ${attachIdentifier};`);
+	await queryNodeConnection(
+		connection,
 		`ATTACH ${catalogPathSQL} AS ${attachIdentifier} (TYPE ducklake, DATA_PATH ${localDataPathSQL}, OVERRIDE_DATA_PATH true);`
 	);
-	await connection.run(`USE ${attachIdentifier};`);
+	await queryNodeConnection(connection, `USE ${attachIdentifier};`);
 
 	let totalRowCount = 0;
 	let totalScore = 0;
@@ -338,8 +407,8 @@ export async function createDuckLakeBuilder({ outputFilepath, localDataPath, rem
 			const schemaName = quoteIdentifier(sourceName);
 			const relationName = quoteIdentifier(tableName);
 
-			await connection.run(`CREATE SCHEMA IF NOT EXISTS ${schemaName};`);
-			await connection.run(`DROP TABLE IF EXISTS ${schemaName}.${relationName};`);
+			await queryNodeConnection(connection, `CREATE SCHEMA IF NOT EXISTS ${schemaName};`);
+			await queryNodeConnection(connection, `DROP TABLE IF EXISTS ${schemaName}.${relationName};`);
 
 			/** @type {any} */
 			let normalizedData = data;
@@ -401,7 +470,8 @@ export async function createDuckLakeBuilder({ outputFilepath, localDataPath, rem
 				const parquetFiles = tempParquetFiles.map(
 					(filename) => `'${filename.replaceAll('\\', '/').replaceAll("'", "''")}'`
 				);
-				await connection.run(
+				await queryNodeConnection(
+					connection,
 					`CREATE OR REPLACE TABLE ${schemaName}.${relationName} AS SELECT * FROM read_parquet([${parquetFiles.join(',')}]);`
 				);
 			} else {
@@ -411,7 +481,7 @@ export async function createDuckLakeBuilder({ outputFilepath, localDataPath, rem
 							`${quoteIdentifier(name)} ${evidenceTypeToSQL(evidenceType)}`
 					)
 					.join(', ');
-				await connection.run(`CREATE TABLE ${schemaName}.${relationName} (${emptyColumns});`);
+				await queryNodeConnection(connection, `CREATE TABLE ${schemaName}.${relationName} (${emptyColumns});`);
 			}
 
 			for (const tmpFile of tempParquetFiles) {
@@ -433,14 +503,13 @@ export async function createDuckLakeBuilder({ outputFilepath, localDataPath, rem
 
 		async finalize() {
 			try {
-				await connection.run(`CALL ducklake_flush_inlined_data(${toSQLString(DUCKLAKE_ATTACH_NAME)});`);
+				await queryNodeConnection(
+					connection,
+					`CALL ducklake_flush_inlined_data(${toSQLString(DUCKLAKE_ATTACH_NAME)});`
+				);
 
-				try {
-					connection.disconnectSync();
-				} catch {}
-				try {
-					db.closeSync();
-				} catch {}
+				await safelyDisconnectConnection(connection);
+				await safelyCloseDb(db);
 
 				const { size } = await fs.stat(resolvedOutputFilepath);
 				if (size > 100 * 1024 * 1024) {
@@ -549,10 +618,11 @@ export async function createDuckLakeBackend({
 /**
  * Create a DuckLake backend reader for querying existing .ducklake files
  * @param {{
- * 	databaseFilePath: string
+	* 	databaseFilePath: string,
+	* 	ducklakeDataPath?: string
  * }} options
  */
-export async function createDuckLakeBackendReader({ databaseFilePath }) {
+export async function createDuckLakeBackendReader({ databaseFilePath, ducklakeDataPath }) {
 	await loadDuckDBNodeDependencies();
 	/** @type {any} */
 	let db;
@@ -583,6 +653,11 @@ export async function createDuckLakeBackendReader({ databaseFilePath }) {
 				const resolvedPath = databaseFilePath.match(/^[a-zA-Z]+:\/\//)
 					? databaseFilePath
 					: toDuckDBPath(path.resolve(databaseFilePath));
+				const resolvedDataPath = ducklakeDataPath
+					? ducklakeDataPath.match(/^[a-zA-Z]+:\/\//)
+						? ducklakeDataPath
+						: toDuckDBPath(path.resolve(ducklakeDataPath))
+					: null;
 				db = await DuckDBInstance.create(':memory:', {
 					access_mode: 'READ_WRITE',
 					custom_user_agent: 'evidence-dev'
@@ -591,26 +666,22 @@ export async function createDuckLakeBackendReader({ databaseFilePath }) {
 				await connection.run('SET ieee_floating_point_ops = false;');
 				await connection.run('SET old_implicit_casting = true;');
 				await loadDuckLakeExtension(connection);
-				await connection.run(
-					`ATTACH ${toSQLString(resolvedPath)} AS ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)} (TYPE ducklake, AUTOMATIC_MIGRATION true);`
+				const attachOptions = resolvedDataPath
+					? `TYPE ducklake, DATA_PATH ${toSQLString(resolvedDataPath)}, OVERRIDE_DATA_PATH true, READ_ONLY`
+					: 'TYPE ducklake, READ_ONLY';
+				await queryNodeConnection(
+					connection,
+					`ATTACH ${toSQLString(resolvedPath)} AS ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)} (${attachOptions});`
 				);
-				await connection.run(`USE ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)};`);
+				await queryNodeConnection(connection, `USE ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)};`);
 			})();
 		}
 
 		try {
 			await initReadDBPromise;
 		} catch (error) {
-			if (connection) {
-				try {
-					connection.disconnectSync();
-				} catch {}
-			}
-			if (db) {
-				try {
-					db.closeSync();
-				} catch {}
-			}
+			await safelyDisconnectConnection(connection);
+			await safelyCloseDb(db);
 			connection = undefined;
 			db = undefined;
 			initReadDBPromise = null;
@@ -653,16 +724,8 @@ export async function createDuckLakeBackendReader({ databaseFilePath }) {
 		 */
 		async close() {
 			await queryQueue;
-			if (connection) {
-				try {
-					connection.disconnectSync();
-				} catch {}
-			}
-			if (db) {
-				try {
-					db.closeSync();
-				} catch {}
-			}
+			await safelyDisconnectConnection(connection);
+			await safelyCloseDb(db);
 			connection = undefined;
 			db = undefined;
 			initReadDBPromise = null;

@@ -30,8 +30,6 @@ let db;
 /** @type {import("@duckdb/duckdb-wasm/dist/types/src/bindings/connection").DuckDBConnection} */
 let connection;
 
-/** @type {{ current: { close?: () => Promise<void> | void } | null } | null} */
-let activeExternalConnectionRef = null;
 let shutdownHandlersRegistered = false;
 /** @type {Promise<void> | null} */
 let shutdownPromise = null;
@@ -41,7 +39,10 @@ const pendingQueries = new Set();
 
 function registerPendingQuery(promise) {
 	pendingQueries.add(promise);
-	promise.finally(() => pendingQueries.delete(promise));
+	promise.then(
+		() => pendingQueries.delete(promise),
+		() => pendingQueries.delete(promise)
+	);
 }
 
 const { resolve: resolveInit, reject: rejectInit, promise: initPromise } = getPromise();
@@ -53,31 +54,12 @@ const defaultOpenConfig = getDefaultOpenConfig();
 let backend;
 
 /**
- * @param {string} pathOrUrl
+ * Disabled intentionally: DuckLake should always route through the
+ * DuckDB-WASM node backend path.
+ * @returns {Promise<null>}
  */
-const isDuckLakePath = (pathOrUrl) => /\.ducklake(?:$|\?|#)/i.test(pathOrUrl);
-
-/**
- * @param {string} pathOrUrl
- */
-async function createExternalConnection(pathOrUrl) {
-	if (!isDuckLakePath(pathOrUrl)) return null;
-
-	const { createDuckLakeBackendReader } = await import('../backends/ducklake.js');
-	const reader = await createDuckLakeBackendReader({ databaseFilePath: pathOrUrl });
-	await reader.initReadDB();
-
-	return {
-		query: (sql) => reader.queryReadDB(sql),
-		close: () => reader.close()
-	};
-}
-
-async function closeActiveExternalConnection() {
-	const externalConnection = activeExternalConnectionRef?.current;
-	if (!externalConnection?.close) return;
-	activeExternalConnectionRef.current = null;
-	await externalConnection.close();
+async function createExternalConnection() {
+	return null;
 }
 
 function registerShutdownHandlers() {
@@ -86,9 +68,7 @@ function registerShutdownHandlers() {
 
 	process.once('beforeExit', async () => {
 		if (!shutdownPromise) {
-			shutdownPromise = Promise.allSettled([...pendingQueries])
-				.then(() => closeActiveExternalConnection())
-				.catch(() => {});
+			shutdownPromise = Promise.allSettled([...pendingQueries]).catch(() => {});
 		}
 		await shutdownPromise;
 	});
@@ -148,7 +128,6 @@ export async function initDB() {
 			registerPendingQuery,
 			backend: null // Will be set after backend is created
 		};
-		activeExternalConnectionRef = externalConnectionRef;
 		registerShutdownHandlers();
 		backend = createNodeBackendFactory(context);
 		// Set backend reference in context so it can reference itself
@@ -201,6 +180,7 @@ export async function setParquetURLs(urls, options = false) {
  */
 export async function loadDuckDBDatabase(filePath, { addBasePath = (x) => x } = {}) {
 	if (!backend) await initDB();
+
 	try {
 		return await backend.loadDuckDBDatabase(filePath, { addBasePath });
 	} catch (e) {

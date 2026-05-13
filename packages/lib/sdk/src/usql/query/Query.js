@@ -458,7 +458,34 @@ SELECT COUNT(*) as rowCount FROM (${this.text.trim()})
 			(lengthResult, isPromise) => {
 				const after = performance.now();
 				this.#lengthQueryTime = after - before;
-				this.#length = lengthResult[0].rowCount;
+
+				const rowCountRaw = lengthResult?.[0]?.rowCount;
+				if (rowCountRaw === undefined || rowCountRaw === null) {
+					const error = new Error(
+						`Length query for ${this.#id} did not return a rowCount value`
+					);
+					this.#error = error;
+					this.#sharedLengthPromise.reject(error);
+					if (isPromise) {
+						return this.#sharedLengthPromise.promise;
+					}
+					return this;
+				}
+
+				const parsedRowCount = Number(rowCountRaw);
+				if (!Number.isFinite(parsedRowCount)) {
+					const error = new Error(
+						`Length query for ${this.#id} returned non-numeric rowCount: ${String(rowCountRaw)}`
+					);
+					this.#error = error;
+					this.#sharedLengthPromise.reject(error);
+					if (isPromise) {
+						return this.#sharedLengthPromise.promise;
+					}
+					return this;
+				}
+
+				this.#length = parsedRowCount;
 				this.#sharedLengthPromise.resolve(this);
 				if (isPromise) {
 					return this.#sharedLengthPromise.promise;
