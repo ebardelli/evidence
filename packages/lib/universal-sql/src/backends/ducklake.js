@@ -26,16 +26,30 @@ let WriterPropertiesBuilder;
 let Table;
 /** @type {any} */
 let DuckDBInstance;
-let importsLoaded = false;
+let duckDbImportsLoaded = false;
+let parquetWriterImportsLoaded = false;
 
 const DUCKLAKE_ATTACH_NAME = 'evidence_ducklake';
 const ABSOLUTE_HTTP_URL_REGEX = /^https?:\/\//i;
 
-async function loadNodeDependencies() {
-	if (importsLoaded) return;
+async function loadDuckDBNodeDependencies() {
+	if (duckDbImportsLoaded) return;
 	if (typeof process === 'undefined' || !process.versions || !process.versions.node) {
 		throw new Error('DuckLake backend is only available in Node.js environment');
 	}
+
+	const { createRequire } = await import('module');
+	const require = createRequire(import.meta.url);
+	const nodeApi = require('@duckdb/node-api');
+	DuckDBInstance = nodeApi.DuckDBInstance;
+
+	duckDbImportsLoaded = true;
+}
+
+
+async function loadParquetWriterDependencies() {
+	if (parquetWriterImportsLoaded) return;
+	await loadDuckDBNodeDependencies();
 
 	const parquetWasm = await import('parquet-wasm/node/arrow1.js');
 	Compression = parquetWasm.Compression;
@@ -43,12 +57,7 @@ async function loadNodeDependencies() {
 	WriterPropertiesBuilder = parquetWasm.WriterPropertiesBuilder;
 	Table = parquetWasm.Table;
 
-	const { createRequire } = await import('module');
-	const require = createRequire(import.meta.url);
-	const nodeApi = require('@duckdb/node-api');
-	DuckDBInstance = nodeApi.DuckDBInstance;
-
-	importsLoaded = true;
+	parquetWriterImportsLoaded = true;
 }
 
 /**
@@ -244,6 +253,34 @@ async function loadDuckLakeExtension(connection) {
 }
 
 /**
+ * @param {any} connection
+ * @param {string} sql
+ */
+async function queryNodeConnection(connection, sql) {
+	if (typeof connection?.query === 'function') {
+		return connection.query(sql);
+	}
+
+	if (typeof connection?.runAndReadAll === 'function') {
+		const reader = await connection.runAndReadAll(sql);
+		if (typeof reader?.readAll === 'function') {
+			await reader.readAll();
+		}
+		if (typeof reader?.getRowObjectsJS === 'function') {
+			return reader.getRowObjectsJS();
+		}
+		return [];
+	}
+
+	if (typeof connection?.run === 'function') {
+		await connection.run(sql);
+		return [];
+	}
+
+	throw new Error('DuckDB node connection does not expose query, runAndReadAll, or run methods');
+}
+
+/**
  * @param {{
  *  outputFilepath: string,
  *  localDataPath: string,
@@ -251,7 +288,7 @@ async function loadDuckLakeExtension(connection) {
  * }} options
  */
 export async function createDuckLakeBuilder({ outputFilepath, localDataPath, remoteDataPath }) {
-	await loadNodeDependencies();
+	await loadParquetWriterDependencies();
 
 	const resolvedOutputFilepath = path.resolve(outputFilepath);
 	const resolvedLocalDataPath = path.resolve(localDataPath);
@@ -516,29 +553,69 @@ export async function createDuckLakeBackend({
  * }} options
  */
 export async function createDuckLakeBackendReader({ databaseFilePath }) {
-	await loadNodeDependencies();
+	await loadDuckDBNodeDependencies();
 	/** @type {any} */
 	let db;
 	/** @type {any} */
 	let connection;
+	/** @type {Promise<void> | null} */
+	let initReadDBPromise = null;
+	/** @type {Promise<void>} */
+	let queryQueue = Promise.resolve();
+
+	/**
+	 * @template T
+	 * @param {() => Promise<T>} task
+	 */
+	const enqueueQuery = (task) => {
+		const pending = queryQueue.then(task, task);
+		queryQueue = pending.then(
+			() => undefined,
+			() => undefined
+		);
+		return pending;
+	};
 
 	const initReadDB = async () => {
-		if (db) return;
-		const resolvedPath = databaseFilePath.match(/^[a-zA-Z]+:\/\//)
-			? databaseFilePath
-			: toDuckDBPath(path.resolve(databaseFilePath));
-		db = await DuckDBInstance.create(':memory:', {
-			access_mode: 'READ_ONLY',
-			custom_user_agent: 'evidence-dev'
-		});
-		connection = await db.connect();
-		await connection.run('SET ieee_floating_point_ops = false;');
-		await connection.run('SET old_implicit_casting = true;');
-		await loadDuckLakeExtension(connection);
-		await connection.run(
-			`ATTACH ${toSQLString(resolvedPath)} AS ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)} (TYPE ducklake);`
-		);
-		await connection.run(`USE ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)};`);
+		if (connection) return;
+		if (!initReadDBPromise) {
+			initReadDBPromise = (async () => {
+				const resolvedPath = databaseFilePath.match(/^[a-zA-Z]+:\/\//)
+					? databaseFilePath
+					: toDuckDBPath(path.resolve(databaseFilePath));
+				db = await DuckDBInstance.create(':memory:', {
+					access_mode: 'READ_WRITE',
+					custom_user_agent: 'evidence-dev'
+				});
+				connection = await db.connect();
+				await connection.run('SET ieee_floating_point_ops = false;');
+				await connection.run('SET old_implicit_casting = true;');
+				await loadDuckLakeExtension(connection);
+				await connection.run(
+					`ATTACH ${toSQLString(resolvedPath)} AS ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)} (TYPE ducklake, AUTOMATIC_MIGRATION true);`
+				);
+				await connection.run(`USE ${quoteIdentifier(DUCKLAKE_ATTACH_NAME)};`);
+			})();
+		}
+
+		try {
+			await initReadDBPromise;
+		} catch (error) {
+			if (connection) {
+				try {
+					connection.disconnectSync();
+				} catch {}
+			}
+			if (db) {
+				try {
+					db.closeSync();
+				} catch {}
+			}
+			connection = undefined;
+			db = undefined;
+			initReadDBPromise = null;
+			throw error;
+		}
 	};
 
 	return {
@@ -558,8 +635,10 @@ export async function createDuckLakeBackendReader({ databaseFilePath }) {
 		 * @returns {Promise<any>}
 		 */
 		async queryReadDB(sql) {
-			if (!connection) await initReadDB();
-			return connection.query(sql);
+			return enqueueQuery(async () => {
+				if (!connection) await initReadDB();
+				return queryNodeConnection(connection, sql);
+			});
 		},
 
 		/**
@@ -573,6 +652,7 @@ export async function createDuckLakeBackendReader({ databaseFilePath }) {
 		 * Close the connection
 		 */
 		async close() {
+			await queryQueue;
 			if (connection) {
 				try {
 					connection.disconnectSync();
@@ -583,6 +663,9 @@ export async function createDuckLakeBackendReader({ databaseFilePath }) {
 					db.closeSync();
 				} catch {}
 			}
+			connection = undefined;
+			db = undefined;
+			initReadDBPromise = null;
 		}
 	};
 }

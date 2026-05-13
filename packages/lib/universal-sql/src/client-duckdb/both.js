@@ -226,6 +226,31 @@ function buildDerivedSearchPath(rows) {
 }
 
 /**
+ * @param {string} pathOrUrl
+ */
+function isDuckLakePath(pathOrUrl) {
+	return /\.ducklake(?:$|\?|#)/i.test(pathOrUrl);
+}
+
+/**
+ * @param {string} value
+ */
+function toSQLString(value) {
+	return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/**
+ * @param {string} pathOrUrl
+ */
+function toAbsoluteHttpUrl(pathOrUrl) {
+	if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+	if (typeof window !== 'undefined' && window.location?.origin && pathOrUrl.startsWith('/')) {
+		return `${window.location.origin}${pathOrUrl}`;
+	}
+	return pathOrUrl;
+}
+
+/**
  * @param {unknown} error
  */
 function isMissingTableError(error) {
@@ -234,20 +259,74 @@ function isMissingTableError(error) {
 }
 
 /**
+ * @param {unknown} error
+ */
+function isMissingSearchPathSchemaError(error) {
+	const message = error instanceof Error ? error.message : String(error);
+	return /SET search_path:\s+No catalog\s*\+\s*schema named/i.test(message);
+}
+
+/**
+ * @param {unknown} result
+ */
+function normalizeQueryRows(result) {
+	if (Array.isArray(result)) return result;
+	try {
+		return arrowTableToJSON(result);
+	} catch {
+		return [];
+	}
+}
+
+/**
  * @param {Object} context
  * @param {string[] | unknown} schemas
  * @param {(sql: string) => unknown | Promise<unknown>} runSearchPathQuery
  */
 async function updateSearchPath(context, schemas, runSearchPathQuery) {
-	const searchPath = buildSearchPath(schemas);
-	if (context.externalConnectionRef?.current) {
-		await queryExternalConnection(
-			context.externalConnectionRef.current,
-			`PRAGMA search_path='${searchPath}'`
-		);
+	const requestedSchemas = normalizeSchemas(schemas);
+	const runQuery = context.externalConnectionRef?.current
+		? (sql) => queryExternalConnection(context.externalConnectionRef.current, sql)
+		: runSearchPathQuery;
+
+	const applySearchPath = async (targetSchemas) => {
+		const searchPath = buildSearchPath(targetSchemas);
+		await runQuery(`PRAGMA search_path='${searchPath}'`);
+	};
+
+	let initialSearchPathError;
+	try {
+		await applySearchPath(requestedSchemas);
 		return;
+	} catch (error) {
+		initialSearchPathError = error;
+		if (!requestedSchemas.length) throw error;
 	}
-	await runSearchPathQuery(`PRAGMA search_path='${searchPath}'`);
+
+	let existingSchemas = [];
+	try {
+		const schemaRows = await runQuery(`
+			SELECT DISTINCT table_schema
+			FROM information_schema.tables
+			WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'main', 'temp')
+			ORDER BY table_schema
+		`);
+		existingSchemas = normalizeQueryRows(schemaRows)
+			.map((row) => String(row?.table_schema ?? '').trim())
+			.filter(Boolean);
+	} catch {
+		// If schema introspection fails, fall back to main only.
+	}
+
+	const existingSchemaSet = new Set(existingSchemas);
+	const filteredSchemas = requestedSchemas.filter((schema) => existingSchemaSet.has(schema));
+
+	try {
+		await applySearchPath(filteredSchemas);
+	} catch (fallbackError) {
+		if (isMissingSearchPathSchemaError(initialSearchPathError)) throw fallbackError;
+		throw initialSearchPathError;
+	}
 }
 
 /**
@@ -507,6 +586,34 @@ export function createBrowserBackendFactory(context) {
 				path = `/${url}`;
 			}
 			if (path.startsWith('/static')) path = path.substring(7);
+
+			if (isDuckLakePath(url)) {
+				await reopenDatabase(
+					{
+						...context.defaultOpenConfig,
+						accessMode: context.DuckDBAccessMode.READ_WRITE
+					},
+					{ reset: true }
+				);
+
+				const resolvedPath = toAbsoluteHttpUrl(addBasePath(path));
+				const ducklakeDataPath = resolvedPath.replace(
+					/\.ducklake(?:\?.*|#.*)?$/i,
+					'.ducklake.data'
+				);
+				const attachName = 'evidence_ducklake';
+				try {
+					await context.connectionRef.current.query('INSTALL ducklake;');
+				} catch {}
+				await context.connectionRef.current.query('LOAD ducklake;');
+				await context.connectionRef.current.query(
+					`ATTACH ${toSQLString(resolvedPath)} AS "${attachName}" (TYPE ducklake, DATA_PATH ${toSQLString(ducklakeDataPath)}, OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true);`
+				);
+				await context.connectionRef.current.query(`USE "${attachName}";`);
+				context.resolveTables();
+				return;
+			}
+
 			await context.db.registerFileURL(
 				fileName,
 				addBasePath(path),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createNodeBackendFactory } from './both.js';
+import { createBrowserBackendFactory, createNodeBackendFactory } from './both.js';
 import path from 'node:path';
 
 describe('shared backend factory manifest initialization', () => {
@@ -134,5 +134,89 @@ describe('shared backend factory manifest initialization', () => {
 		await backend.updateSearchPath([]);
 
 		expect(query).toHaveBeenCalledWith("PRAGMA search_path='main'");
+	});
+
+	it('uses external connection for ducklake database manifests', async () => {
+		const externalQuery = vi.fn(async () => []);
+		const createExternalConnection = vi.fn(async () => ({
+			query: externalQuery,
+			close: vi.fn()
+		}));
+		const db = {
+			connect: vi.fn(() => ({ query: vi.fn() })),
+			open: vi.fn(),
+			reset: vi.fn(),
+			flushFiles: vi.fn(),
+			globFiles: vi.fn(() => []),
+			dropFile: vi.fn(),
+			registerFileBuffer: vi.fn()
+		};
+
+		const context = {
+			initDB: vi.fn(async () => {}),
+			connectionRef: { current: { query: vi.fn() } },
+			externalConnectionRef: { current: null },
+			createExternalConnection,
+			db,
+			defaultOpenConfig: {},
+			DuckDBAccessMode: { READ_ONLY: 'READ_ONLY' },
+			pathSep: '/',
+			cwd: () => '/project',
+			isAbsolutePath: (candidatePath) => candidatePath.startsWith('/'),
+			resolvePath: (...parts) => path.posix.resolve(...parts),
+			existsSync: () => false,
+			readFileSync: vi.fn(() => new Uint8Array()),
+			getBasename: () => 'evidence.ducklake',
+			cache_for_hash: vi.fn(),
+			get_arrow_if_sql_already_run: vi.fn(),
+			backend: null
+		};
+
+		const backend = createNodeBackendFactory(context);
+		context.backend = backend;
+
+		await backend.loadDuckDBDatabase('/_evidence/query/evidence.ducklake');
+
+		expect(createExternalConnection).toHaveBeenCalledWith('/_evidence/query/evidence.ducklake');
+		expect(db.registerFileBuffer).not.toHaveBeenCalled();
+		expect(db.open).not.toHaveBeenCalled();
+	});
+
+	it('attaches ducklake catalogs in browser runtime', async () => {
+		const query = vi.fn(async () => []);
+		const registerFileURL = vi.fn(async () => {});
+		const context = {
+			initDB: vi.fn(async () => {}),
+			connectionRef: { current: { query } },
+			externalConnectionRef: { current: null },
+			db: {
+				connect: vi.fn(async () => ({ query })),
+				open: vi.fn(async () => {}),
+				reset: vi.fn(async () => {}),
+				flushFiles: vi.fn(async () => {}),
+				globFiles: vi.fn(async () => []),
+				dropFile: vi.fn(async () => {}),
+				registerFileURL
+			},
+			defaultOpenConfig: {},
+			DuckDBDataProtocol: { HTTP: 'HTTP' },
+			DuckDBAccessMode: { READ_ONLY: 'READ_ONLY', READ_WRITE: 'READ_WRITE' },
+			resolveTables: vi.fn(),
+			rejectTables: vi.fn(),
+			tablesPromise: Promise.resolve(),
+			backend: null
+		};
+
+		const backend = createBrowserBackendFactory(context);
+		context.backend = backend;
+
+		await backend.loadDuckDBDatabase('/_evidence/query/evidence.ducklake');
+
+		expect(registerFileURL).not.toHaveBeenCalled();
+		expect(query).toHaveBeenCalledWith('LOAD ducklake;');
+		expect(query).toHaveBeenCalledWith(
+			`ATTACH '/_evidence/query/evidence.ducklake' AS "evidence_ducklake" (TYPE ducklake, DATA_PATH '/_evidence/query/evidence.ducklake.data', OVERRIDE_DATA_PATH true, AUTOMATIC_MIGRATION true);`
+		);
+		expect(query).toHaveBeenCalledWith('USE "evidence_ducklake";');
 	});
 });

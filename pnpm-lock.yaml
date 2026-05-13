@@ -40,8 +40,8 @@ importers:
         specifier: 2.21.0
         version: 2.21.0
       '@duckdb/duckdb-wasm':
-        specifier: 1.29.0
-        version: 1.29.0
+        specifier: ^1.33.1-dev53.0
+        version: 1.33.1-dev53.0
       '@evidence-dev/bigquery':
         specifier: link:packages/datasources/bigquery
         version: link:packages/datasources/bigquery
@@ -1283,8 +1283,11 @@ importers:
   packages/lib/universal-sql:
     dependencies:
       '@duckdb/duckdb-wasm':
-        specifier: ^1.30.0
-        version: 1.32.0
+        specifier: ^1.33.1-dev53.0
+        version: 1.33.1-dev53.0
+      '@duckdb/node-api':
+        specifier: 1.5.2-r.1
+        version: 1.5.2-r.1
       apache-arrow:
         specifier: 17.0.0
         version: 17.0.0
@@ -1836,6 +1839,55 @@ importers:
       vitest:
         specifier: ^2.1.9
         version: 2.1.9
+
+  sites/test-ducklake-backend:
+    dependencies:
+      '@evidence-dev/component-utilities':
+        specifier: workspace:*
+        version: link:../../packages/lib/component-utilities
+      '@evidence-dev/core-components':
+        specifier: workspace:*
+        version: link:../../packages/ui/core-components
+      '@evidence-dev/csv':
+        specifier: workspace:*
+        version: link:../../packages/datasources/csv
+      '@evidence-dev/duckdb':
+        specifier: workspace:*
+        version: link:../../packages/datasources/duckdb
+      '@evidence-dev/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
+      '@evidence-dev/faker-datasource':
+        specifier: workspace:*
+        version: link:../../packages/datasources/faker
+      '@evidence-dev/motherduck':
+        specifier: workspace:^
+        version: link:../../packages/datasources/motherduck
+      '@evidence-dev/mssql':
+        specifier: workspace:^
+        version: link:../../packages/datasources/mssql
+      '@evidence-dev/postgres':
+        specifier: workspace:*
+        version: link:../../packages/datasources/postgres
+      '@evidence-dev/sdk':
+        specifier: workspace:*
+        version: link:../../packages/lib/sdk
+      '@evidence-dev/snowflake':
+        specifier: workspace:*
+        version: link:../../packages/datasources/snowflake
+      '@evidence-dev/source-javascript':
+        specifier: workspace:*
+        version: link:../../packages/datasources/javascript
+      '@evidence-dev/sqlite':
+        specifier: workspace:*
+        version: link:../../packages/datasources/sqlite
+      '@evidence-dev/tailwind':
+        specifier: workspace:*
+        version: link:../../packages/ui/tailwind
+    devDependencies:
+      cross-env:
+        specifier: ^7.0.3
+        version: 7.0.3
 
   sites/test-env:
     dependencies:
@@ -3874,17 +3926,11 @@ packages:
       - '@algolia/client-search'
     dev: false
 
-  /@duckdb/duckdb-wasm@1.29.0:
-    resolution: {integrity: sha512-8Zq7vafQuIz9gklC/9375KE38UlkaS2n8+yvG+/JK7irm3DjwYNJHL4xfplIj0bSHFIg6we5XhWYFqtE/vO3+Q==}
+  /@duckdb/duckdb-wasm@1.33.1-dev53.0:
+    resolution: {integrity: sha512-LYqcC2R/qaeWV1Ffpf2EYOp6sARXdT2X+AVIrUrxYkcXKdv2TqtiyrABOAEo7vpSsFyHDfpvluZroaF5yMITng==}
     dependencies:
       apache-arrow: 17.0.0
-    dev: true
-
-  /@duckdb/duckdb-wasm@1.32.0:
-    resolution: {integrity: sha512-IewXTNYEjsZCPE9weUWgtjGxUlMRo7qhX0GF6tq/KjK8bnY+RAl4cyUdYUfcdzbyb4b9ZxPC+FOsCcxgaKFWMg==}
-    dependencies:
-      apache-arrow: 17.0.0
-    dev: false
+      qs: 6.14.2
 
   /@duckdb/node-api@1.4.2-r.1:
     resolution: {integrity: sha512-8Ef4R/Lq+rXTpcqZIJZe6ALfgMGxy88HmiPvRpWrRw1fUTy85x1U0NnGrqCklZsmWyZUdPwVYj90MQOF2MY/TA==}
@@ -3892,8 +3938,22 @@ packages:
       '@duckdb/node-bindings': 1.4.2-r.1
     dev: false
 
+  /@duckdb/node-api@1.5.2-r.1:
+    resolution: {integrity: sha512-OzBBnS0JGXMoS5mzKNY/Ylr7SshcRQiLFIoxQ4AlePwJ2fNeDL/fbHu/knjxUrXwW1fJBTUgwWftmxDdnZZb3A==}
+    dependencies:
+      '@duckdb/node-bindings': 1.5.2-r.1
+    dev: false
+
   /@duckdb/node-bindings-darwin-arm64@1.4.2-r.1:
     resolution: {integrity: sha512-C4yBI3zBX7iZ9iq8zJDvPatXA+2xM22sg1kX3fx76nG+qTqKtU/dGFVYL7Fx6cBYxBO1ZZ8Y+vjgYb6/bich8A==}
+    cpu: [arm64]
+    os: [darwin]
+    requiresBuild: true
+    dev: false
+    optional: true
+
+  /@duckdb/node-bindings-darwin-arm64@1.5.2-r.1:
+    resolution: {integrity: sha512-v35FyKOb8EJCvaiPF7k0gvKiJTXR7PPQDNoWR0Gu+YSX5O9b+DIguzt1348Of3HebHy6ATSMzlUekaVA9YXu+g==}
     cpu: [arm64]
     os: [darwin]
     requiresBuild: true
@@ -3908,8 +3968,24 @@ packages:
     dev: false
     optional: true
 
+  /@duckdb/node-bindings-darwin-x64@1.5.2-r.1:
+    resolution: {integrity: sha512-SU9dIJ1BluKkkGxi4UsP4keqkkstB2YDySF9KcYu3EZKIVM3FTv2zc7XO38dXnHOq6+F3WqhWWZvD+XU945p7A==}
+    cpu: [x64]
+    os: [darwin]
+    requiresBuild: true
+    dev: false
+    optional: true
+
   /@duckdb/node-bindings-linux-arm64@1.4.2-r.1:
     resolution: {integrity: sha512-r2Ml1LvU2vkVMx4YU04T79FjGkYg8YMVtbOz7j740SZGIi5Cch5P1/oy48jJBWRqoaXuqimpYWeTZiGVeCQiZA==}
+    cpu: [arm64]
+    os: [linux]
+    requiresBuild: true
+    dev: false
+    optional: true
+
+  /@duckdb/node-bindings-linux-arm64@1.5.2-r.1:
+    resolution: {integrity: sha512-3Tra9xM3aM3denaER4KhJ6//6PpmPbik9ECBQ+sh9PyKaEgHw/0kAcKnLm5EzWUnXF0qYmZlewvkCrse8KmOYw==}
     cpu: [arm64]
     os: [linux]
     requiresBuild: true
@@ -3924,8 +4000,32 @@ packages:
     dev: false
     optional: true
 
+  /@duckdb/node-bindings-linux-x64@1.5.2-r.1:
+    resolution: {integrity: sha512-pcQvZRHiIfJ9cq8parkSQczQHEml/IeGfnDCMAbEgD6+jaV9Y9Y5Ph1kP9aR+bm6him1S5ZIEr3kZbihjKnWbA==}
+    cpu: [x64]
+    os: [linux]
+    requiresBuild: true
+    dev: false
+    optional: true
+
+  /@duckdb/node-bindings-win32-arm64@1.5.2-r.1:
+    resolution: {integrity: sha512-Ji8tym+N3LkrhVt0Up3bsacD/kpg4/JXFJQqxswiYvBaNCQOk+D+aiVS0GN5pcqvmnG7V7TpsDRzkLEFaWp1vw==}
+    cpu: [arm64]
+    os: [win32]
+    requiresBuild: true
+    dev: false
+    optional: true
+
   /@duckdb/node-bindings-win32-x64@1.4.2-r.1:
     resolution: {integrity: sha512-kIIT8tuoW3mzr9EPcdSoKfv9CgOhTqRryHDI10Z0nuhc9UhqOWPUM/LnSUebfo1mdD9Drm7YrKCKYxNTr5dqBQ==}
+    cpu: [x64]
+    os: [win32]
+    requiresBuild: true
+    dev: false
+    optional: true
+
+  /@duckdb/node-bindings-win32-x64@1.5.2-r.1:
+    resolution: {integrity: sha512-5XqcqC+4R8ghBEEbnc2a0sqfz1zyPBRb9YcmIWfiuDoCYSYFbKhmHcEyNftZDHcwCoLOHXnUin45jraex4STqQ==}
     cpu: [x64]
     os: [win32]
     requiresBuild: true
@@ -3940,6 +4040,17 @@ packages:
       '@duckdb/node-bindings-linux-arm64': 1.4.2-r.1
       '@duckdb/node-bindings-linux-x64': 1.4.2-r.1
       '@duckdb/node-bindings-win32-x64': 1.4.2-r.1
+    dev: false
+
+  /@duckdb/node-bindings@1.5.2-r.1:
+    resolution: {integrity: sha512-bUg3bLVj70YVku6fKyQJS8ASORl7kM7YFVFznsEB9pWbtazPj+ME2x2FUk0WiTzjJdutjzSSGXF066mB4bGGZA==}
+    optionalDependencies:
+      '@duckdb/node-bindings-darwin-arm64': 1.5.2-r.1
+      '@duckdb/node-bindings-darwin-x64': 1.5.2-r.1
+      '@duckdb/node-bindings-linux-arm64': 1.5.2-r.1
+      '@duckdb/node-bindings-linux-x64': 1.5.2-r.1
+      '@duckdb/node-bindings-win32-arm64': 1.5.2-r.1
+      '@duckdb/node-bindings-win32-x64': 1.5.2-r.1
     dev: false
 
   /@esbuild/aix-ppc64@0.27.3:
@@ -5602,6 +5713,8 @@ packages:
       '@parcel/logger': 2.12.0
       '@parcel/utils': 2.12.0
       lmdb: 2.8.5
+    transitivePeerDependencies:
+      - '@swc/helpers'
     dev: true
 
   /@parcel/cache@2.16.4(@parcel/core@2.16.4):
@@ -6726,8 +6839,6 @@ packages:
       '@parcel/types': 2.12.0(@parcel/core@2.16.4)
       '@parcel/utils': 2.12.0
       nullthrows: 1.1.1
-    transitivePeerDependencies:
-      - '@swc/helpers'
     dev: true
 
   /@parcel/workers@2.16.4(@parcel/core@2.16.4):

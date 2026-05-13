@@ -52,6 +52,27 @@ const defaultOpenConfig = getDefaultOpenConfig();
 /** @type {ReturnType<typeof createNodeBackendFactory>} */
 let backend;
 
+/**
+ * @param {string} pathOrUrl
+ */
+const isDuckLakePath = (pathOrUrl) => /\.ducklake(?:$|\?|#)/i.test(pathOrUrl);
+
+/**
+ * @param {string} pathOrUrl
+ */
+async function createExternalConnection(pathOrUrl) {
+	if (!isDuckLakePath(pathOrUrl)) return null;
+
+	const { createDuckLakeBackendReader } = await import('../backends/ducklake.js');
+	const reader = await createDuckLakeBackendReader({ databaseFilePath: pathOrUrl });
+	await reader.initReadDB();
+
+	return {
+		query: (sql) => reader.queryReadDB(sql),
+		close: () => reader.close()
+	};
+}
+
 async function closeActiveExternalConnection() {
 	const externalConnection = activeExternalConnectionRef?.current;
 	if (!externalConnection?.close) return;
@@ -110,6 +131,7 @@ export async function initDB() {
 			db,
 			connectionRef,
 			externalConnectionRef,
+			createExternalConnection,
 			initDB,
 			cache_for_hash,
 			get_arrow_if_sql_already_run,
@@ -191,7 +213,7 @@ export async function loadDuckDBDatabase(filePath, { addBasePath = (x) => x } = 
  * Initializes runtime storage from a manifest payload.
  *
  * @param {{
- * 	backend?: 'parquet' | 'duckdb',
+ * 	backend?: 'parquet' | 'duckdb' | 'ducklake' | 'motherduck',
  * 	renderedFiles?: Record<string, string[]>,
  * 	databaseFile?: { path?: string, url?: string },
  * 	locatedSchemas?: string[]

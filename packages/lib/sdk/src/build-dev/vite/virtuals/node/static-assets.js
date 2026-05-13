@@ -20,6 +20,15 @@ export const getManifest = (dest = 'node') => {
 
 		if (!manifest.renderedFiles) throw new Error('Malformed Manifest');
 
+		if (dest === 'browser' && manifest.databaseFile?.url && !manifest.databaseFile.url.startsWith('http')) {
+			const normalizedUrl = manifest.databaseFile.url.startsWith('/')
+				? manifest.databaseFile.url
+				: `/${manifest.databaseFile.url}`;
+			if (normalizedUrl.startsWith('/data/') || normalizedUrl.startsWith('/static/data/')) {
+				manifest.databaseFile.url = `/_evidence/query/${path.basename(normalizedUrl)}`;
+			}
+		}
+
 		if (dest === 'node') {
 			const renderedFiles = Object.fromEntries(
 				Object.entries(manifest.renderedFiles).map(([schema, queries]) => {
