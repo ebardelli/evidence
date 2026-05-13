@@ -2,9 +2,8 @@ import { browser, building, dev } from '$app/environment';
 import {
 	tableFromIPC,
 	initDB,
-	setParquetURLs,
+	initializeFromManifest,
 	query as usqlQuery,
-	updateSearchPath,
 	arrowTableToJSON,
 	waitForPendingQueries
 } from '@evidence-dev/universal-sql/client-duckdb';
@@ -19,20 +18,23 @@ export const prerender = import.meta.env.VITE_EVIDENCE_SPA !== 'true';
 export const trailingSlash = 'always';
 
 const loadDB = async () => {
-	let renderedFiles = {};
+	/** @type {{ renderedFiles?: Record<string, string[]>, databaseFile?: { name?: string, url?: string, path?: string }, locatedSchemas?: string[] }} */
+	let manifest = {};
 
 	if (!browser) {
 		const { readFile } = await import('fs/promises');
-		({ renderedFiles } = JSON.parse(
+		manifest = JSON.parse(
 			await readFile('./static/data/manifest.json', 'utf-8').catch(() => '{}')
-		));
+		);
 	} else {
 		const res = await fetch(addBasePath('/data/manifest.json'));
-		if (res.ok) ({ renderedFiles } = await res.json());
+		if (res.ok) manifest = await res.json();
 	}
 	await profile(initDB);
 
-	if (Object.keys(renderedFiles ?? {}).length === 0) {
+	const { renderedFiles = {}, databaseFile } = manifest;
+
+	if (Object.keys(renderedFiles).length === 0 && !databaseFile?.url && !databaseFile?.path) {
 		console.warn(`No sources found, execute "npm run sources" to generate`.trim());
 		if (dev) {
 			toasts.add(
@@ -46,8 +48,7 @@ const loadDB = async () => {
 			);
 		}
 	} else {
-		await profile(setParquetURLs, renderedFiles, { addBasePath });
-		await profile(updateSearchPath, Object.keys(renderedFiles));
+		await profile(initializeFromManifest, manifest, { addBasePath });
 	}
 };
 
@@ -177,9 +178,7 @@ export const load = async ({ fetch, route, params, url }) => {
 				return database_initialization;
 			},
 			async updateParquetURLs(manifest) {
-				// todo: maybe diff with old?
-				const { renderedFiles } = JSON.parse(manifest);
-				await profile(setParquetURLs, renderedFiles, { addBasePath });
+				await profile(initializeFromManifest, JSON.parse(manifest), { addBasePath });
 			}
 		},
 		inputs,
