@@ -37,7 +37,7 @@ If omitted, Evidence defaults to `parquet`.
 
 - Produces a single database artifact (`evidence.duckdb`)
 - Useful when you want a single-file backend artifact
-- Requires full source builds (filtered/incremental builds are not supported)
+- Supports selective source/query rebuilds
 
 ```yaml
 buildOptions:

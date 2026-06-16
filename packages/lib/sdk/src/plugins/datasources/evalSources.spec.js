@@ -183,4 +183,82 @@ describe('evalSources', () => {
 			})
 		);
 	});
+
+	it('allows filtered evals for ducklake when backend supports filtered builds', async () => {
+		mocks.loadSources.mockResolvedValue([
+			{
+				name: 'warehouse',
+				type: 'duckdb',
+				dir: '/sources/warehouse',
+				options: {},
+				buildOptions: {
+					storageMode: 'ducklake'
+				}
+			}
+		]);
+
+		const writeTable = vi.fn().mockResolvedValue({ rowCount: 1 });
+		mocks.createStorageBackend.mockResolvedValue({
+			manifestBackend: 'ducklake',
+			capabilities: {
+				filteredBuilds: true,
+				externalUrlTables: false
+			},
+			writeTable,
+			finalize: vi.fn().mockResolvedValue({
+				databaseFile: {
+					name: 'evidence.ducklake',
+					url: '/data/evidence.ducklake'
+				}
+			})
+		});
+		mocks.processSource.mockReturnValue(
+			(async function* () {
+				yield makeTable('healthy');
+			})()
+		);
+
+		const manifest = await evalSources(
+			'/data',
+			'/meta',
+			{ sources: new Set(['warehouse']), queries: new Set(['healthy']), only_changed: false },
+			true
+		);
+
+		expect(writeTable).toHaveBeenCalledTimes(1);
+		expect(manifest.backend).toBe('ducklake');
+	});
+
+	it('allows filtered evals for duckdb when backend supports filtered builds', async () => {
+		const writeTable = vi.fn().mockResolvedValue({ rowCount: 1 });
+		mocks.createStorageBackend.mockResolvedValue({
+			manifestBackend: 'duckdb',
+			capabilities: {
+				filteredBuilds: true,
+				externalUrlTables: false
+			},
+			writeTable,
+			finalize: vi.fn().mockResolvedValue({
+				databaseFile: {
+					name: 'evidence.duckdb',
+					url: '/data/evidence.duckdb'
+				}
+			})
+		});
+		mocks.processSource.mockReturnValue(
+			(async function* () {
+				yield makeTable('healthy');
+			})()
+		);
+
+		const manifest = await evalSources(
+			'/data',
+			'/meta',
+			{ sources: new Set(['warehouse']), queries: new Set(['healthy']), only_changed: false },
+			true
+		);
+
+		expect(writeTable).toHaveBeenCalledTimes(1);
+		expect(manifest.backend).toBe('duckdb');
+	});
 });

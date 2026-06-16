@@ -15,6 +15,36 @@ import chalk from 'chalk';
 import { columnsToScore } from '../calculateScore.js';
 import { log } from '@evidence-dev/sdk/logger';
 
+/**
+ * @param {string} tableName
+ */
+const isConnectionConfigTable = (tableName) =>
+	tableName === 'connection' || tableName === 'connection.options';
+
+/**
+ * @param {{
+ * 	sourceName: string,
+ * 	tableName: string,
+ * 	queueConnectionReload: (sourceName: string) => void,
+ * 	queueQueryReload: (sourceName: string, tableName: string) => void,
+ * 	queueSourceReload: (sourceName: string) => void,
+ * 	warn: (message: string) => void
+ * }} options
+ */
+export const handleParquetHmr = ({
+	sourceName,
+	tableName,
+	queueConnectionReload,
+	queueQueryReload
+}) => {
+	if (isConnectionConfigTable(tableName)) {
+		queueConnectionReload(sourceName);
+		return;
+	}
+
+	queueQueryReload(sourceName, tableName);
+};
+
 // Node.js-specific imports - lazy loaded to avoid issues in browser
 let Compression, writeParquet, WriterPropertiesBuilder, Table, DuckDBInstance;
 let importsLoaded = false;

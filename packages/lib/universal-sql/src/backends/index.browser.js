@@ -15,6 +15,22 @@ export const usesDatabaseFile = (backend) =>
 	typeof backend === 'string' && DATABASE_FILE_BACKENDS.includes(/** @type {any} */ (backend));
 
 /**
+ * @returns {(context: {
+ * 	sourceName: string,
+ * 	tableName: string,
+ * 	queueConnectionReload: (sourceName: string) => void,
+ * 	queueQueryReload: (sourceName: string, tableName: string) => void,
+ * 	queueSourceReload: (sourceName: string) => void,
+ * 	warn: (message: string) => void
+ * }) => void}
+ */
+export function getStorageBackendHmrHandler() {
+	return ({ sourceName, tableName, queueQueryReload }) => {
+		queueQueryReload(sourceName, tableName);
+	};
+}
+
+/**
  * Browser runtime does not support creating storage backends.
  */
 export async function createStorageBackend() {

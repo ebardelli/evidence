@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveDuckLakeRemoteUrlPrefix } from './ducklake.js';
+import { resolveDuckLakeRemoteDataPath, resolveDuckLakeRemoteUrlPrefix } from './ducklake.js';
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -28,5 +28,27 @@ describe('resolveDuckLakeRemoteUrlPrefix', () => {
 		expect(resolveDuckLakeRemoteUrlPrefix('https://cdn.example.com/static/data')).toBe(
 			'https://cdn.example.com/static/data'
 		);
+	});
+});
+
+describe('resolveDuckLakeRemoteDataPath', () => {
+	it('preserves nested relative subpaths inside dataPath', () => {
+		expect(
+			resolveDuckLakeRemoteDataPath({
+				dataPath: '/workspace/.evidence/template/_evidence/query',
+				localDataPath: '/workspace/.evidence/template/_evidence/query/ducklake/data/evidence.ducklake.data',
+				remoteUrlPrefix: 'http://localhost:3000/_evidence/query'
+			})
+		).toBe('http://localhost:3000/_evidence/query/ducklake/data/evidence.ducklake.data');
+	});
+
+	it('falls back to basename when local data path is outside dataPath', () => {
+		expect(
+			resolveDuckLakeRemoteDataPath({
+				dataPath: '/workspace/.evidence/template/_evidence/query',
+				localDataPath: '/tmp/custom/evidence.ducklake.data',
+				remoteUrlPrefix: 'http://localhost:3000/_evidence/query'
+			})
+		).toBe('http://localhost:3000/_evidence/query/evidence.ducklake.data');
 	});
 });

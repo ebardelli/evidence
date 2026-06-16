@@ -6,6 +6,7 @@ import { ProcessingQueue } from '../../../lib/processing-queue.js';
 import { VITE_EVENTS } from '../constants.js';
 import { debounce } from 'perfect-debounce';
 import { getEvidenceConfig } from '../../../configuration/getEvidenceConfig.js';
+import { getStorageBackendHmrHandler } from '@evidence-dev/universal-sql';
 /**
  * @returns {import("vite").Plugin}
  */
@@ -13,7 +14,11 @@ export const sourceQueryHmr = () => {
 	const processingQueue = ProcessingQueue();
 	const configStorageMode =
 		/** @type {any} */ (getEvidenceConfig().buildOptions)?.storageMode ?? 'parquet';
-	const usesFullBuildMode = ['duckdb', 'ducklake', 'motherduck'].includes(configStorageMode);
+	const handleBackendHmr = getStorageBackendHmrHandler(configStorageMode);
+	const supportsFilteredBuilds =
+		configStorageMode === 'parquet' ||
+		configStorageMode === 'ducklake' ||
+		configStorageMode === 'duckdb';
 
 	/** @type {import('vite').ViteDevServer | undefined} */
 	let server;
@@ -26,50 +31,52 @@ export const sourceQueryHmr = () => {
 	 * @param {string | null} table
 	 */
 	const processSource = (datasource, table) => async () => {
+		const resolvedDatasource = supportsFilteredBuilds ? datasource : null;
+		const resolvedTable = supportsFilteredBuilds ? table : null;
+		const targetLabel = resolvedDatasource
+			? resolvedTable
+				? `${resolvedDatasource}.${resolvedTable}`
+				: `${resolvedDatasource}.*`
+			: 'all sources';
+
 		if (!server) {
 			console.warn('missing ref to dev server');
 			return;
 		}
 		server.hot.send(VITE_EVENTS.SOURCE_START, {
-			id: `${datasource}.${table}`,
+			id: targetLabel,
 			toast: {
-				id: `${datasource}.${table}`,
+				id: targetLabel,
 				status: 'info',
-				message: `Loading ${datasource}.${table}`
+				message: `Loading ${targetLabel}`
 			}
 		});
 
 		try {
-			const filterOptions = usesFullBuildMode
-				? {
-						sources: null,
-						queries: null,
-						only_changed: false
-					}
-				: {
-						sources: datasource ? new Set([datasource]) : null,
-						queries: table ? new Set([table]) : null,
-						only_changed: false
-					};
+			const filterOptions = {
+				sources: resolvedDatasource ? new Set([resolvedDatasource]) : null,
+				queries: resolvedTable ? new Set([resolvedTable]) : null,
+				only_changed: false
+			};
 
 			const updatedManifest = await evalSources(dataDirectory, metaDirectory, filterOptions, true);
 			latestManifest = await updateManifest(updatedManifest, dataDirectory);
 
 			server?.hot.send(VITE_EVENTS.SOURCE_END, {
-				id: `${datasource}.${table}-end`,
+				id: `${targetLabel}-end`,
 				toast: {
-					id: `${datasource}.${table}`,
+					id: targetLabel,
 					status: 'success',
-					message: `Finished ${datasource}.${table}`
+					message: `Finished ${targetLabel}`
 				}
 			});
 		} catch (e) {
 			server?.hot.send(VITE_EVENTS.SOURCE_ERROR, {
 				error: e instanceof Error ? e.message : e,
 				toast: {
-					id: `${datasource}.${table}`,
+					id: targetLabel,
 					status: 'error',
-					message: `Failed to process ${datasource}.${table}`
+					message: `Failed to process ${targetLabel}`
 				}
 			});
 		}
@@ -86,6 +93,21 @@ export const sourceQueryHmr = () => {
 		},
 		50
 	);
+
+	/**
+	 * @param {string} sourceName
+	 */
+	const queueSourceReload = (sourceName) => {
+		processingQueue.add(processSource(sourceName, null));
+	};
+
+	/**
+	 * @param {string} sourceName
+	 * @param {string} tableName
+	 */
+	const queueQueryReload = (sourceName, tableName) => {
+		processingQueue.add(processSource(sourceName, tableName));
+	};
 
 	/** @type {import("vite").Plugin} */
 	return {
@@ -115,10 +137,17 @@ export const sourceQueryHmr = () => {
 				);
 				return;
 			}
-			// TODO: How can we debounce a little bit to make sure we don't run twice?
-			if (queryName === 'connection' || queryName === 'connection.options')
-				queueOptions(sourceName);
-			else processingQueue.add(processSource(sourceName, queryName));
+
+			handleBackendHmr({
+				sourceName,
+				tableName: queryName,
+				queueConnectionReload: queueOptions,
+				queueQueryReload,
+				queueSourceReload,
+				warn: (message) => {
+					console.warn(message);
+				}
+			});
 		}
 	};
 };

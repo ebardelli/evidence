@@ -15,6 +15,36 @@ import chalk from 'chalk';
 import { columnsToScore } from '../calculateScore.js';
 import { log } from '@evidence-dev/sdk/logger';
 
+/**
+ * @param {string} tableName
+ */
+const isConnectionConfigTable = (tableName) =>
+	tableName === 'connection' || tableName === 'connection.options';
+
+/**
+ * @param {{
+ * 	sourceName: string,
+ * 	tableName: string,
+ * 	queueConnectionReload: (sourceName: string) => void,
+ * 	queueQueryReload: (sourceName: string, tableName: string) => void,
+ * 	queueSourceReload: (sourceName: string) => void,
+ * 	warn: (message: string) => void
+ * }} options
+ */
+export const handleDuckLakeHmr = ({
+	sourceName,
+	tableName,
+	queueConnectionReload,
+	queueQueryReload
+}) => {
+	if (isConnectionConfigTable(tableName)) {
+		queueConnectionReload(sourceName);
+		return;
+	}
+
+	queueQueryReload(sourceName, tableName);
+};
+
 // Node.js-specific imports - lazy loaded to avoid issues in browser
 /** @type {any} */
 let Compression;
@@ -219,6 +249,11 @@ const joinUrlPath = (prefix, suffix) => {
 /**
  * @param {string} value
  */
+const toForwardSlashPath = (value) => value.replaceAll('\\', '/');
+
+/**
+ * @param {string} value
+ */
 const normalizeOrigin = (value) => {
 	const trimmed = value.trim();
 	if (!trimmed) return '';
@@ -290,6 +325,34 @@ export const resolveDuckLakeRemoteUrlPrefix = (urlPrefix) => {
 	}
 
 	return joinUrlPath(origin, urlPrefix);
+};
+
+/**
+ * Resolve the persisted DuckLake remote data path from local paths.
+ * Keeps relative subdirectories (when local path is inside dataPath)
+ * so incremental writes do not re-point catalog metadata to the wrong path.
+ *
+ * @param {{
+ * 	dataPath: string,
+ * 	localDataPath: string,
+ * 	remoteUrlPrefix: string
+ * }} options
+ */
+export const resolveDuckLakeRemoteDataPath = ({ dataPath, localDataPath, remoteUrlPrefix }) => {
+	const resolvedDataPath = path.resolve(dataPath);
+	const resolvedLocalDataPath = path.resolve(localDataPath);
+	const relativeLocalDataPath = path.relative(resolvedDataPath, resolvedLocalDataPath);
+
+	const isInsideDataPath =
+		relativeLocalDataPath.length > 0 &&
+		!relativeLocalDataPath.startsWith('..') &&
+		!path.isAbsolute(relativeLocalDataPath);
+
+	const remoteDataPathSuffix = isInsideDataPath
+		? toForwardSlashPath(relativeLocalDataPath)
+		: path.basename(resolvedLocalDataPath);
+
+	return joinUrlPath(remoteUrlPrefix, remoteDataPathSuffix);
 };
 
 /**
@@ -570,10 +633,11 @@ export async function createDuckLakeBackend({
 		? path.resolve(ducklakeDataPath)
 		: path.join(dataPath, `${databaseFilename}.data`);
 	const remoteUrlPrefix = resolveDuckLakeRemoteUrlPrefix(urlPrefix);
-	const remoteDuckLakeDataPath = joinUrlPath(
-		remoteUrlPrefix,
-		path.basename(localDuckLakeDataPath)
-	);
+	const remoteDuckLakeDataPath = resolveDuckLakeRemoteDataPath({
+		dataPath,
+		localDataPath: localDuckLakeDataPath,
+		remoteUrlPrefix
+	});
 
 	const builder = await createDuckLakeBuilder({
 		outputFilepath: catalogFilepath,
@@ -585,7 +649,7 @@ export async function createDuckLakeBackend({
 		name: 'ducklake',
 		manifestBackend: 'ducklake',
 		capabilities: {
-			filteredBuilds: false,
+			filteredBuilds: true,
 			externalUrlTables: false
 		},
 
