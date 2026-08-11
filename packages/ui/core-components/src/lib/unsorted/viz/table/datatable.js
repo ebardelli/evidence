@@ -48,7 +48,7 @@ export function median(data, column) {
 	// Extract the relevant values and filter out undefined or non-numeric values
 	const values = data
 		.map((item) => item[column])
-		.filter((val) => val !== undefined && !isNaN(val))
+		.filter((val) => val !== undefined && val !== null && !isNaN(val))
 		.sort((a, b) => a - b);
 
 	if (values.length === 0) return 0; // Return 0 or another placeholder if no valid values exist
@@ -87,7 +87,9 @@ export function aggregateColumn(data, columnName, aggType, columnType, weightCol
 	) {
 		return '-'; // Return dash if attempting numeric aggregation on a non-numeric column
 	}
-	const columnValues = data.map((row) => row[columnName]).filter((val) => val !== undefined);
+	const columnValues = data
+		.map((row) => row[columnName])
+		.filter((val) => val !== undefined && val !== null);
 
 	switch (aggType) {
 		case 'sum':
