@@ -91,6 +91,12 @@ export function aggregateColumn(data, columnName, aggType, columnType, weightCol
 		.map((row) => row[columnName])
 		.filter((val) => val !== undefined && val !== null);
 
+	// No non-null values to aggregate: mirrors SQL, where SUM/AVG/MIN/MAX/MEDIAN
+	// over an all-NULL group is NULL (countDistinct/count are unaffected, they're 0-safe)
+	if (columnValues.length === 0 && ['sum', 'min', 'max', 'mean', 'median'].includes(aggType)) {
+		return null;
+	}
+
 	switch (aggType) {
 		case 'sum':
 			return columnValues.reduce((sum, val) => sum + Number(val), 0);
@@ -99,9 +105,7 @@ export function aggregateColumn(data, columnName, aggType, columnType, weightCol
 		case 'max':
 			return Math.max(...columnValues);
 		case 'mean':
-			return columnValues.length
-				? columnValues.reduce((sum, val) => sum + Number(val), 0) / columnValues.length
-				: '-';
+			return columnValues.reduce((sum, val) => sum + Number(val), 0) / columnValues.length;
 		case 'count':
 			return data.length;
 		case 'countDistinct':
