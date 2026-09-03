@@ -40,6 +40,11 @@ import {
 	sqlserverConnectionSchema,
 	type SqlServerConnection
 } from './sqlserver/connection-schema';
+import {
+	duckdbBase,
+	duckdbConnectionSchema,
+	type DuckDBConnection
+} from './duckdb/connection-schema';
 
 export type FieldCategory = 'credential' | 'context' | 'visibility' | 'rls';
 
@@ -132,7 +137,9 @@ export {
 	motherduckBase,
 	motherduckConnectionSchema,
 	sqlserverBase,
-	sqlserverConnectionSchema
+	sqlserverConnectionSchema,
+	duckdbBase,
+	duckdbConnectionSchema
 };
 export type {
 	SnowflakeConnection,
@@ -143,7 +150,8 @@ export type {
 	PostgresConnection,
 	CubeConnection,
 	MotherDuckConnection,
-	SqlServerConnection
+	SqlServerConnection,
+	DuckDBConnection
 };
 
 export const CONNECTION_TYPES = [
@@ -155,7 +163,8 @@ export const CONNECTION_TYPES = [
 	'postgres',
 	'cube',
 	'motherduck',
-	'sqlserver'
+	'sqlserver',
+	'duckdb'
 ] as const;
 export type ConnectionType = (typeof CONNECTION_TYPES)[number];
 
@@ -168,7 +177,8 @@ export type Connection =
 	| PostgresConnection
 	| CubeConnection
 	| MotherDuckConnection
-	| SqlServerConnection;
+	| SqlServerConnection
+	| DuckDBConnection;
 
 const schemasByType = {
 	snowflake: snowflakeConnectionSchema,
@@ -179,7 +189,8 @@ const schemasByType = {
 	postgres: postgresConnectionSchema,
 	cube: cubeConnectionSchema,
 	motherduck: motherduckConnectionSchema,
-	sqlserver: sqlserverConnectionSchema
+	sqlserver: sqlserverConnectionSchema,
+	duckdb: duckdbConnectionSchema
 } as const;
 
 export function getConnectionSchema(type: ConnectionType): z.ZodType {

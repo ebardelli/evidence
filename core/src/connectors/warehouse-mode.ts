@@ -14,7 +14,8 @@ export const WAREHOUSE_MODES = [
 	'postgres',
 	'cube',
 	'motherduck',
-	'sqlserver'
+	'sqlserver',
+	'duckdb'
 ] as const;
 
 export type WarehouseMode = (typeof WAREHOUSE_MODES)[number];

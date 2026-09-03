@@ -112,7 +112,8 @@ const WAREHOUSE_LABELS: Record<WarehouseMode, string> = {
 	postgres: 'PostgreSQL',
 	cube: 'Cube',
 	motherduck: 'MotherDuck',
-	sqlserver: 'SQL Server'
+	sqlserver: 'SQL Server',
+	duckdb: 'DuckDB'
 };
 
 export function warehouseLabel(mode: WarehouseMode): string {

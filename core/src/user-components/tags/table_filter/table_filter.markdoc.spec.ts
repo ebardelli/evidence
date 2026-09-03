@@ -449,7 +449,8 @@ describe('table filter string literal escaping', () => {
 		postgres: "category = 'zzz\\'' OR 1=1 --'",
 		cube: "category = 'zzz\\'' OR 1=1 --'",
 		motherduck: "category = 'zzz\\'' OR 1=1 --'",
-		sqlserver: "category = 'zzz\\'' OR 1=1 --'"
+		sqlserver: "category = 'zzz\\'' OR 1=1 --'",
+		duckdb: "category = 'zzz\\'' OR 1=1 --'"
 	};
 
 	it.each(Object.entries(escapedPayload))(
@@ -584,7 +585,8 @@ describe('table filter identifier quoting', () => {
 		postgres: '"Total Sales" = 100',
 		cube: '"Total Sales" = 100',
 		motherduck: '"Total Sales" = 100',
-		sqlserver: '"Total Sales" = 100'
+		sqlserver: '"Total Sales" = 100',
+		duckdb: '"Total Sales" = 100'
 	};
 
 	const injectedIdentifier: Record<WarehouseType, string> = {
@@ -596,7 +598,8 @@ describe('table filter identifier quoting', () => {
 		postgres: '"total_sales"" OR 1=1 --" = 100',
 		cube: '"total_sales"" OR 1=1 --" = 100',
 		motherduck: '"total_sales"" OR 1=1 --" = 100',
-		sqlserver: '"total_sales"" OR 1=1 --" = 100'
+		sqlserver: '"total_sales"" OR 1=1 --" = 100',
+		duckdb: '"total_sales"" OR 1=1 --" = 100'
 	};
 
 	it.each(Object.entries(spacedIdentifier))('quotes a spaced identifier for %s', (type, sql) => {
