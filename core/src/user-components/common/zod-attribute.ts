@@ -4,7 +4,7 @@ import type {
 	Scalar,
 	ValidationError
 } from '@markdoc/markdoc';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { AttributeTypeWithZodSchema } from '../types';
 import { getInnerZodSchema } from './getInnerZodSchema';
 

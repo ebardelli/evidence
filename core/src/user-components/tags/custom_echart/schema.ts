@@ -19,7 +19,7 @@ import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { HEIGHT_ATTRIBUTE } from '../../common/height-attribute';
 import { CONNECT_GROUP_ATTRIBUTE } from '../../common/connect-group-attribute';
 import { ZodAttribute } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import JSON5 from 'json5';
 import { extractConfigSource } from './extract-config-source';
 import { parseCustomEchartConfig } from './parse-custom-echart-config';

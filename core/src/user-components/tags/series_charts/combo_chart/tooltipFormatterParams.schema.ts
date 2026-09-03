@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * This schema is used to quickly validate the shape of the argument to the ECharts tooltip.formatter callback

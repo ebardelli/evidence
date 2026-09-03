@@ -1,5 +1,5 @@
 import type { ValidationError } from '@markdoc/markdoc';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { UserComponentSchema } from '../../types';
 import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { ZodAttribute } from '../../common/zod-attribute';

@@ -223,6 +223,32 @@ describe('loadConnectionConfig', () => {
 		});
 	});
 
+	describe('duckdb', () => {
+		it('defaults to an in-memory database with no setup script', async () => {
+			await writeYaml(`type: duckdb\n`);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toEqual({ type: 'duckdb', path: ':memory:', schemas: [], setupSql: undefined });
+		});
+
+		it('parses an inline setup_sql', async () => {
+			await writeYaml(`type: duckdb\nsetup_sql: "INSTALL httpfs;"\n`);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toMatchObject({ type: 'duckdb', setupSql: 'INSTALL httpfs;' });
+		});
+
+		it('resolves setup_sql_path relative to cwd', async () => {
+			await writeFile(path.join(workDir, 'setup.sql'), 'INSTALL httpfs;\nLOAD httpfs;');
+			await writeYaml(`type: duckdb\nsetup_sql_path: ./setup.sql\n`);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toMatchObject({ type: 'duckdb', setupSql: 'INSTALL httpfs;\nLOAD httpfs;' });
+		});
+
+		it('rejects both setup_sql and setup_sql_path', async () => {
+			await writeYaml(`type: duckdb\nsetup_sql: "INSTALL httpfs;"\nsetup_sql_path: ./setup.sql\n`);
+			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/Provide only one of/);
+		});
+	});
+
 	it('rejects unknown type', async () => {
 		await writeYaml(`type: redshift\n`);
 		await expect(loadConnectionConfig(workDir)).rejects.toThrow(/unsupported type/);
