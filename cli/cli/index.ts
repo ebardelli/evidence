@@ -44,6 +44,22 @@ import { signup } from './signup.ts';
 // Main
 // ============================================================================
 
+// DuckDB's native addon has to be extracted from the compiled binary and put
+// on NODE_PATH before anything imports @duckdb/node-api (see duckdb.ts's
+// ensureDuckdbNativeAddonAvailableForServer doc comment) — for a server that
+// means once here, before it binds a port, not lazily per-request, and via a
+// non-blocking re-exec (the "For Server" variant) so this process keeps its
+// own signal handling instead of leaving shutdown entirely to the child.
+// Gated on the connection actually being duckdb so every other warehouse's
+// `evidence dev` stays exactly as fast as before.
+async function ensureDuckdbNativeAddonIfConfigured(): Promise<void> {
+	const cwd = process.env.EVIDENCE_PROJECT_CWD || process.cwd();
+	const { isDuckdbConnectionYaml, ensureDuckdbNativeAddonAvailableForServer } = await import(
+		'./connection/duckdb.ts'
+	);
+	if (isDuckdbConnectionYaml(cwd)) await ensureDuckdbNativeAddonAvailableForServer();
+}
+
 const args = parseArgs();
 
 // --project <path> changes the effective project directory for everything
@@ -409,6 +425,7 @@ try {
 				const { startDevServer } = await import('./server.dev.ts');
 				await startDevServer({ port: args.port, open });
 			} else {
+				await ensureDuckdbNativeAddonIfConfigured();
 				const { startServer } = await import('./server.ts');
 				await startServer({ port: args.port, open, host: args.host });
 			}
@@ -435,6 +452,7 @@ try {
 				console.error('  ✗ serve is only available in the compiled CLI binary.');
 				process.exit(1);
 			}
+			await ensureDuckdbNativeAddonIfConfigured();
 			const { startServer } = await import('./server.ts');
 			await startServer({ port: args.port, open: args.open ?? false, host: args.host });
 			await track('cli_command', { command: 'serve' });

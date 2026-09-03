@@ -26,7 +26,7 @@ import type { Node } from '@markdoc/markdoc';
 import { ZodAttribute } from '../../../common/zod-attribute';
 import { xAxisOptionsSchema } from './x-axis-options-schema';
 import { yAxisOptionsSchema } from './y-axis-options-schema';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { HANDLE_MISSING_ATTRIBUTE } from '../../../common/handle-missing-attribute';
 import { colorPaletteSchema, seriesColorsSchema } from '../../../common/chart-options-schema';
 import { setZodMetadata } from '../../../common/zod-metadata';

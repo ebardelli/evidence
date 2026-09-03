@@ -23,7 +23,7 @@ import { baseComparisonSchema } from '../../common/comparison-schema';
 import { ZodAttribute } from '../../common/zod-attribute';
 import { METRIC_ATTRIBUTE } from '../../common/metric-attribute';
 import type { Validator } from '../../validators/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 const comparisonSchema = baseComparisonSchema
 	.extend({

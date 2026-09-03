@@ -10,7 +10,7 @@ import {
 } from '../../../../../validators';
 import { ifCondition } from '../../../../../validators/ifCondition';
 import { requiresData } from '../requiresData.validator';
-import z from 'zod';
+import z from 'zod/v3';
 import { isStringNotNumber } from '../isStringNotNumber.validator';
 import type { LabelOption } from 'echarts/types/src/util/types.js';
 

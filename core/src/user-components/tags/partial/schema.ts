@@ -3,7 +3,7 @@ import { partialFileExists, partialCircularReference, and } from '../../validato
 import { unresolvedPartialVariables } from '../../validators/unresolvedPartialVariables';
 import type { UserComponentSchema } from '../../types';
 import { ZodAttribute } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { parseFrontmatter } from '../../../utils/parseFrontmatter';
 import { TRANSLATIONS_KEY } from '../../../constants/variable-keys';
 import { resolvePartialFile } from '../../common/resolve-reference';

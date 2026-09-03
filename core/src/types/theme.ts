@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 // Color can be a hex string
 const hexColorSchema = z.string().regex(/^#[0-9A-Fa-f]{6}$/);

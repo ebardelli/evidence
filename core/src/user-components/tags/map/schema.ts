@@ -7,7 +7,7 @@ import {
 } from '../../validators';
 import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { ZodAttribute } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 const attributes = {
 	title: {

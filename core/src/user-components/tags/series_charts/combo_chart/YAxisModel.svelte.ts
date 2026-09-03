@@ -1,6 +1,6 @@
 import { formatValue } from '../../../formatValue';
 import { getMinMax } from '../../../getMinMax';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { SeriesModel } from './series/SeriesModel.svelte';
 import type { YAXisOption } from 'echarts/types/src/coord/cartesian/AxisModel.js';
 import { yAxisOptionsSchema } from './y-axis-options-schema';

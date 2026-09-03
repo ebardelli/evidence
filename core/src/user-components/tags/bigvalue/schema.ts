@@ -25,7 +25,7 @@ import { SQL_OPTIONS, REFRESH_INTERVAL_ATTRIBUTE } from '../../common/sql-option
 import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { baseComparisonSchema } from '../../common/comparison-schema';
 import { ZodAttribute, booleanVariableSchema } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { setZodMetadata } from '../../common/zod-metadata';
 
 const comparisonSchema = baseComparisonSchema

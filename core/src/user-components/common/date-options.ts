@@ -3,7 +3,7 @@ import type { SqlDialect } from '../../sql-dialect';
 import { defaultDialect } from '../../sql-dialect';
 import { ZodAttribute } from './zod-attribute';
 import { setZodMetadata } from './zod-metadata';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
 	format,
 	startOfWeek as dfStartOfWeek,

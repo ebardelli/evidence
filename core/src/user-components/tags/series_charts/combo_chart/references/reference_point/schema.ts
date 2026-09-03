@@ -12,7 +12,7 @@ import {
 import { ifCondition } from '../../../../../validators/ifCondition';
 import { requiresData } from '../requiresData.validator';
 import defaultsDeep from 'lodash/defaultsDeep';
-import z from 'zod';
+import z from 'zod/v3';
 
 const REFERENCE_POINT_LABEL_POSITIONS = ['top', 'right', 'bottom', 'left'] as const;
 

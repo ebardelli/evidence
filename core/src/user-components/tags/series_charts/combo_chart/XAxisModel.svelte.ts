@@ -5,7 +5,7 @@ import type { XAXisOption } from 'echarts/types/src/coord/cartesian/AxisModel.js
 import { mode } from 'mode-watcher';
 import { TWO_TIER_LABEL_LINE_HEIGHT, X_AXIS_FONT_SIZE } from './constants';
 import formatTitle from '../../../formatTitle';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { xAxisOptionsSchema } from './x-axis-options-schema';
 import { SvelteDate } from 'svelte/reactivity';
 import type { YAxisModel } from './YAxisModel.svelte';

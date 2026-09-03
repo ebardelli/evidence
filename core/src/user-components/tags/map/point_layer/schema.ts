@@ -1,7 +1,7 @@
 import type { UserComponentSchema } from '../../../types';
 import type { ValidationError } from '@markdoc/markdoc';
 import { ZodAttribute } from '../../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
 	and,
 	validateEmptyAttributes,

@@ -16,7 +16,7 @@ import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { HEIGHT_ATTRIBUTE } from '../../common/height-attribute';
 import { CONNECT_GROUP_ATTRIBUTE } from '../../common/connect-group-attribute';
 import { ZodAttribute, NumberVariable } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
 	ECHARTS_OPTIONS_ATTRIBUTE,
