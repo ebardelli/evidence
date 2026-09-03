@@ -265,7 +265,8 @@ export class Metadata {
 				this.#warehouseMode === 'cube' ||
 				this.#warehouseMode === 'redshift' ||
 				this.#warehouseMode === 'motherduck' ||
-				this.#warehouseMode === 'sqlserver')
+				this.#warehouseMode === 'sqlserver' ||
+				this.#warehouseMode === 'duckdb')
 		) {
 			this.#loading = false;
 			return;
@@ -309,6 +310,10 @@ export class Metadata {
 
 		if (this.#warehouseMode === 'motherduck') {
 			return this.#loadMotherduck();
+		}
+
+		if (this.#warehouseMode === 'duckdb') {
+			return this.#loadMotherduck('DuckDB');
 		}
 
 		try {
@@ -650,7 +655,8 @@ ${schemaFilter}`
 		}
 	}
 
-	async #loadMotherduck(): Promise<void> {
+	// Also serves local DuckDB (same engine and information_schema); `label` names it in errors.
+	async #loadMotherduck(label = 'MotherDuck'): Promise<void> {
 		try {
 			// DuckDB exposes a standard `information_schema`. String concat is `||`,
 			// and double-quoted column aliases are valid. Exclude the engine's own
@@ -681,8 +687,8 @@ ${schemaFilter}`
 			]);
 
 			if (columnsResult.error) {
-				logger.error({ columnsResult }, 'Failed to fetch MotherDuck metadata');
-				throw new Error(`Failed to fetch MotherDuck metadata: ${columnsResult.error}`);
+				logger.error({ columnsResult }, `Failed to fetch ${label} metadata`);
+				throw new Error(`Failed to fetch ${label} metadata: ${columnsResult.error}`);
 			}
 
 			const viewNames = new SvelteSet(viewsResult.error ? [] : viewsResult.rows.map((r) => r.name));
@@ -711,8 +717,8 @@ ${schemaFilter}`
 				);
 			}
 		} catch (e) {
-			logger.error(e, 'Failed to fetch MotherDuck metadata');
-			throw new Error('Failed to fetch MotherDuck metadata', { cause: e });
+			logger.error(e, `Failed to fetch ${label} metadata`);
+			throw new Error(`Failed to fetch ${label} metadata`, { cause: e });
 		} finally {
 			this.#loading = false;
 		}
