@@ -7,7 +7,8 @@ import type {
 	SqlServerConnectionConfig,
 	DatabricksConnectionConfig,
 	RedshiftConnectionConfig,
-	AthenaConnectionConfig
+	AthenaConnectionConfig,
+	DuckDBConnectionConfig
 } from './types';
 
 const bq = (extra: Partial<BigQueryConnectionConfig> = {}): BigQueryConnectionConfig => ({
@@ -63,6 +64,12 @@ const databricks = (extra: Partial<DatabricksConnectionConfig> = {}): Databricks
 		...extra
 		// The `...extra` spread widens the token/oauth discriminant; cast back.
 	}) as DatabricksConnectionConfig;
+
+const duckdb = (extra: Partial<DuckDBConnectionConfig> = {}): DuckDBConnectionConfig => ({
+	type: 'duckdb',
+	path: ':memory:',
+	...extra
+});
 
 describe('listTablesSql (bigquery)', () => {
 	it('backtick-quotes the `rows` alias (`rows` is a reserved keyword)', () => {
@@ -294,5 +301,23 @@ describe('nativeListTablesSql (logged-in org, no connection.yaml)', () => {
 		expect(nativeListTablesSql('bigquery', ['a', 'b'])).toContain(
 			'`a`.INFORMATION_SCHEMA.TABLES UNION ALL'
 		);
+	});
+});
+
+describe('listTablesSql (duckdb)', () => {
+	it('unqualifies the default main schema and excludes system catalogs when the allowlist is empty', () => {
+		const sql = listTablesSql(duckdb());
+		expect(sql).toContain('information_schema.tables');
+		expect(sql).toContain("table_schema NOT IN ('information_schema', 'pg_catalog')");
+		expect(sql).not.toContain('table_schema IN (');
+	});
+
+	it('scopes to the schemas allowlist when set', () => {
+		const sql = listTablesSql(duckdb({ schemas: ['main', 's3_analytics'] }));
+		expect(sql).toContain("table_schema IN ('main', 's3_analytics')");
+	});
+
+	it('escapes single quotes in schema names', () => {
+		expect(listTablesSql(duckdb({ schemas: ["a'b"] }))).toContain("IN ('a''b')");
 	});
 });

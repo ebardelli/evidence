@@ -50,6 +50,11 @@ import {
 	athenaConnectionSchema,
 	type AthenaConnection
 } from './athena/connection-schema';
+import {
+	duckdbBase,
+	duckdbConnectionSchema,
+	type DuckDBConnection
+} from './duckdb/connection-schema';
 
 export type FieldCategory = 'credential' | 'context' | 'visibility' | 'rls';
 
@@ -146,7 +151,9 @@ export {
 	sqlserverBase,
 	sqlserverConnectionSchema,
 	athenaBase,
-	athenaConnectionSchema
+	athenaConnectionSchema,
+	duckdbBase,
+	duckdbConnectionSchema
 };
 export type {
 	SnowflakeConnection,
@@ -159,7 +166,8 @@ export type {
 	RedshiftConnection,
 	MotherDuckConnection,
 	SqlServerConnection,
-	AthenaConnection
+	AthenaConnection,
+	DuckDBConnection
 };
 
 export const CONNECTION_TYPES = [
@@ -173,7 +181,8 @@ export const CONNECTION_TYPES = [
 	'redshift',
 	'motherduck',
 	'sqlserver',
-	'athena'
+	'athena',
+	'duckdb'
 ] as const;
 export type ConnectionType = (typeof CONNECTION_TYPES)[number];
 
@@ -188,7 +197,8 @@ export type Connection =
 	| RedshiftConnection
 	| MotherDuckConnection
 	| SqlServerConnection
-	| AthenaConnection;
+	| AthenaConnection
+	| DuckDBConnection;
 
 const schemasByType = {
 	snowflake: snowflakeConnectionSchema,
@@ -201,7 +211,8 @@ const schemasByType = {
 	redshift: redshiftConnectionSchema,
 	motherduck: motherduckConnectionSchema,
 	sqlserver: sqlserverConnectionSchema,
-	athena: athenaConnectionSchema
+	athena: athenaConnectionSchema,
+	duckdb: duckdbConnectionSchema
 } as const;
 
 export function getConnectionSchema(type: ConnectionType): z.ZodType {

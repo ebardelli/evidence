@@ -48,5 +48,22 @@ export default defineConfig({
 			'bits-ui',
 			'runed'
 		]
+	},
+	build: {
+		rollupOptions: {
+			// Only exists inside the compiled CLI binary (see cli/adapter/index.js's
+			// generateDuckDBNativeAssetsModule, written after this vite build runs).
+			// A bare specifier, not a relative path: duckdb.ts is bundled into this
+			// SSR build too, and Rollup relocates it into a chunk at some arbitrary
+			// depth — externalizing a *relative* id would have Rollup rewrite it
+			// relative to the chunk's new location, which never matches where the
+			// generated package actually ends up on disk. A bare id passes through
+			// untouched, so real node_modules-style resolution (bun, at compile
+			// time) finds the same package regardless of chunk depth.
+			// duckdb.ts dynamic-imports it in a try/catch and falls back to normal
+			// node_modules resolution when it's absent — true here, in dev, and in
+			// the SvelteKit-server (non-compiled) build.
+			external: (id) => id === 'duckdb-native-assets-generated'
+		}
 	}
 });

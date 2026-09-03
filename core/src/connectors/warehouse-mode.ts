@@ -16,7 +16,8 @@ export const WAREHOUSE_MODES = [
 	'redshift',
 	'motherduck',
 	'sqlserver',
-	'athena'
+	'athena',
+	'duckdb'
 ] as const;
 
 export type WarehouseMode = (typeof WAREHOUSE_MODES)[number];

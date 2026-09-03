@@ -18,6 +18,7 @@ export { RedshiftDialect } from './sql-dialect/redshift';
 export { MotherDuckDialect } from './sql-dialect/motherduck';
 export { SqlServerDialect } from './sql-dialect/sqlserver';
 export { AthenaDialect } from './sql-dialect/athena';
+export { DuckDBDialect } from './sql-dialect/duckdb';
 
 import { ClickHouseDialect } from './sql-dialect/clickhouse';
 import { SnowflakeDialect } from './sql-dialect/snowflake';
@@ -30,6 +31,7 @@ import { RedshiftDialect } from './sql-dialect/redshift';
 import { MotherDuckDialect } from './sql-dialect/motherduck';
 import { SqlServerDialect } from './sql-dialect/sqlserver';
 import { AthenaDialect } from './sql-dialect/athena';
+import { DuckDBDialect } from './sql-dialect/duckdb';
 import type { SqlDialect } from './sql-dialect/common';
 
 export const defaultDialect: SqlDialect = new ClickHouseDialect();
@@ -45,7 +47,8 @@ export type WarehouseType =
 	| 'redshift'
 	| 'motherduck'
 	| 'sqlserver'
-	| 'athena';
+	| 'athena'
+	| 'duckdb';
 
 export function dialectFor(type: WarehouseType | null | undefined): SqlDialect {
 	switch (type) {
@@ -69,6 +72,8 @@ export function dialectFor(type: WarehouseType | null | undefined): SqlDialect {
 			return new SqlServerDialect();
 		case 'athena':
 			return new AthenaDialect();
+		case 'duckdb':
+			return new DuckDBDialect();
 		default:
 			return new ClickHouseDialect();
 	}
