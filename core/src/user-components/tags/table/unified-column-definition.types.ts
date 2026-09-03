@@ -8,7 +8,7 @@ import {
 	colorOptionsSchema
 } from './measure/schema';
 import { imageOptionsSchema, logoOptionsSchema } from './dimension/schema';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export interface UnifiedColumnDefinition {
 	type: 'dimension' | 'measure' | 'pivot';

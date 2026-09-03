@@ -8,6 +8,7 @@ import {
 	PostgresDialect,
 	CubeDialect,
 	MotherDuckDialect,
+	DuckDBDialect,
 	defaultDialect
 } from './sql-dialect';
 import type { SqlDialect } from './sql-dialect';
@@ -1238,6 +1239,115 @@ describe('MotherDuckDialect', () => {
 	});
 });
 
+describe('DuckDBDialect', () => {
+	const dialect = new DuckDBDialect();
+
+	it('has name "duckdb"', () => {
+		expect(dialect.name).toBe('duckdb');
+	});
+
+	it('implements SqlDialect', () => {
+		const d: SqlDialect = dialect;
+		expect(d).toBeDefined();
+	});
+
+	it('declares case-insensitive identifiers and supports FILTER', () => {
+		expect(dialect.caseInsensitiveIdentifiers).toBe(true);
+		expect(dialect.supportsFilterClause).toBe(true);
+		expect(dialect.strictDerivedTables).toBe(false);
+	});
+
+	describe('dateGrain', () => {
+		it('maps day/week/month/quarter/year/hour via DATE_TRUNC', () => {
+			expect(dialect.dateGrain('day', 'created_at', 'sunday')).toBe(
+				"DATE_TRUNC('day', created_at)"
+			);
+			expect(dialect.dateGrain('week', 'created_at', 'monday')).toBe(
+				"DATE_TRUNC('week', created_at)"
+			);
+		});
+
+		it('maps date-part extractions', () => {
+			expect(dialect.dateGrain('day of week', 'd', 'sunday')).toBe('DAYOFWEEK(d)');
+			expect(dialect.dateGrain('week of year', 'd', 'sunday')).toBe('WEEKOFYEAR(d)');
+		});
+
+		it('returns the column unchanged for unknown grain', () => {
+			expect(dialect.dateGrain('century', 'd', 'sunday')).toBe('d');
+		});
+	});
+
+	describe('dateAdd / dateSub', () => {
+		it('emits the to_<unit>s interval helper', () => {
+			expect(dialect.dateAdd('day', 7, 'created_at')).toBe('created_at + to_days(7)');
+		});
+		it('subtracts the interval for dateSub', () => {
+			expect(dialect.dateSub('day', 30, 'created_at')).toBe('created_at - to_days(30)');
+		});
+	});
+
+	describe('shortDateLabel / dateLiteral / castToString', () => {
+		it('emits a strftime short-date pattern', () => {
+			expect(dialect.shortDateLabel('created_at')).toBe("strftime(created_at, '%b %-d/%y')");
+		});
+		it('emits a DATE literal', () => {
+			expect(dialect.dateLiteral('2025-01-31')).toBe("DATE '2025-01-31'");
+		});
+		it('casts to VARCHAR', () => {
+			expect(dialect.castToString('amount')).toBe('CAST(amount AS VARCHAR)');
+		});
+	});
+
+	describe('groupByAll / groupArray', () => {
+		it('emits GROUP BY ALL', () => {
+			expect(dialect.groupByAll(['category', 'x'])).toBe('GROUP BY ALL');
+		});
+		it('builds an ordered JSON-array string (DuckDB lists are homogeneous)', () => {
+			expect(dialect.groupArray('date', 'value')).toBe(
+				'to_json(list(json_array(date, value) ORDER BY date))'
+			);
+		});
+	});
+
+	describe('nullSafeEqual / iff / caseInsensitiveLike / concat', () => {
+		it('uses IS NOT DISTINCT FROM for NULL-safe equality', () => {
+			expect(dialect.nullSafeEqual('a', 'b')).toBe('a IS NOT DISTINCT FROM b');
+		});
+		it('expands iff to CASE WHEN', () => {
+			expect(dialect.iff('x > 0', 'a', 'b')).toBe('CASE WHEN x > 0 THEN a ELSE b END');
+		});
+		it('uses ILIKE for case-insensitive LIKE', () => {
+			expect(dialect.caseInsensitiveLike('name', '%foo%')).toBe("name ILIKE '%foo%'");
+		});
+		it('concatenates with the || operator', () => {
+			expect(dialect.concat(['a', "' - '", 'b'])).toBe("a || ' - ' || b");
+		});
+	});
+
+	describe('function lookups', () => {
+		it('inherits common aggregations and adds DuckDB-specific ones', () => {
+			expect(dialect.aggregationFunctions.has('SUM')).toBe(true);
+			expect(dialect.aggregationFunctions.has('ARRAY_AGG')).toBe(true);
+			expect(dialect.aggregationFunctions.has('QUANTILE_CONT')).toBe(true);
+		});
+		it('inherits common non-aggs and adds DuckDB-specific ones', () => {
+			expect(dialect.nonAggregationFunctions.has('CAST')).toBe(true);
+			expect(dialect.nonAggregationFunctions.has('STRFTIME')).toBe(true);
+			expect(dialect.nonAggregationFunctions.has('TO_JSON')).toBe(true);
+		});
+	});
+
+	describe('quoteIdentifierIfNeeded', () => {
+		it('leaves simple identifiers bare (DuckDB does not fold case)', () => {
+			expect(dialect.quoteIdentifierIfNeeded('revenue')).toBe('revenue');
+			expect(dialect.quoteIdentifierIfNeeded('Revenue')).toBe('Revenue');
+		});
+		it('quotes identifiers with spaces', () => {
+			expect(dialect.quoteIdentifierIfNeeded('Total Sales')).toBe('"Total Sales"');
+		});
+	});
+});
+
 describe('defaultDialect', () => {
 	it('is an instance of ClickHouseDialect', () => {
 		expect(defaultDialect).toBeInstanceOf(ClickHouseDialect);
@@ -1262,6 +1372,7 @@ describe('escapeStringLiteral', () => {
 		new PostgresDialect(),
 		new FabricDialect(),
 		new MotherDuckDialect(),
+		new DuckDBDialect(),
 		new CubeDialect()
 	];
 
@@ -1358,7 +1469,8 @@ describe('applyRowLimit', () => {
 		['Postgres', new PostgresDialect()],
 		['Cube', new CubeDialect()],
 		['Databricks', new DatabricksDialect()],
-		['MotherDuck', new MotherDuckDialect()]
+		['MotherDuck', new MotherDuckDialect()],
+		['DuckDB', new DuckDBDialect()]
 	];
 
 	describe.each(limitFamily)('%s', (_name, dialect) => {

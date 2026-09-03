@@ -3,7 +3,7 @@
  * We can't upgrade to Zod v4 right now because the ai-sdk packages depend on Zod v3
  */
 
-import type z from 'zod';
+import type z from 'zod/v3';
 
 const METADATA = Symbol('metadata');
 

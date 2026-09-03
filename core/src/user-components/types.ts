@@ -8,7 +8,7 @@ import type {
 import type { FilterClass } from '../Filter.svelte';
 import type { Component, Snippet } from 'svelte';
 import type { Simplify } from 'type-fest';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { UserComponentModelClass } from './UserComponentModel';
 import type { DataSource } from './common/data-sources';
 

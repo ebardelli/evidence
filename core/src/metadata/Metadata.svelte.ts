@@ -10,6 +10,7 @@ import { getFabricToJsType } from '../connectors/fabric/type-mapping';
 import { getDatabricksToJsType } from '../connectors/databricks/type-mapping';
 import { getPostgresToJsType } from '../connectors/postgres/type-mapping';
 import { getMotherduckToJsType } from '../connectors/motherduck/type-mapping';
+import { getDuckDBToJsType } from '../connectors/duckdb/type-mapping';
 import { TableMetadata } from './TableMetadata.svelte';
 import { groupColumnsByTable } from './group-columns';
 import {
@@ -234,7 +235,8 @@ export class Metadata {
 				this.#warehouseMode === 'databricks' ||
 				this.#warehouseMode === 'postgres' ||
 				this.#warehouseMode === 'cube' ||
-				this.#warehouseMode === 'motherduck')
+				this.#warehouseMode === 'motherduck' ||
+				this.#warehouseMode === 'duckdb')
 		) {
 			this.#loading = false;
 			return;
@@ -270,6 +272,10 @@ export class Metadata {
 
 		if (this.#warehouseMode === 'motherduck') {
 			return this.#loadMotherduck();
+		}
+
+		if (this.#warehouseMode === 'duckdb') {
+			return this.#loadDuckdb();
 		}
 
 		try {
@@ -651,6 +657,81 @@ ${schemaFilter}`
 		} catch (e) {
 			logger.error(e, 'Failed to fetch MotherDuck metadata');
 			throw new Error('Failed to fetch MotherDuck metadata', { cause: e });
+		} finally {
+			this.#loading = false;
+		}
+	}
+
+	async #loadDuckdb(): Promise<void> {
+		try {
+			// Same DuckDB information_schema as MotherDuck (it's the same engine's
+			// catalog). String concat is `||`, and double-quoted column aliases are
+			// valid. Exclude the engine's own system catalogs when no explicit
+			// allowlist is configured.
+			const schemaFilter =
+				this.#schemaAllowlist.length > 0
+					? `WHERE table_schema IN (${this.#schemaAllowlist.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ')})`
+					: `WHERE table_schema NOT IN ('information_schema', 'pg_catalog')`;
+
+			const [columnsResult, viewsResult] = await Promise.all([
+				this.#catalogQuery<{
+					tableName: string;
+					columnName: string;
+					columnType: string;
+				}>(
+					`SELECT table_schema || '.' || table_name as "tableName",
+       column_name as "columnName",
+       data_type as "columnType"
+FROM information_schema.columns
+${schemaFilter}
+ORDER BY table_schema, table_name, ordinal_position`
+				),
+				this.#catalogQuery<{ name: string }>(
+					`SELECT table_schema || '.' || table_name as "name"
+FROM information_schema.views
+${schemaFilter}`
+				)
+			]);
+
+			if (columnsResult.error) {
+				logger.error({ columnsResult }, 'Failed to fetch DuckDB metadata');
+				throw new Error(`Failed to fetch DuckDB metadata: ${columnsResult.error}`);
+			}
+
+			const viewNames = new SvelteSet(viewsResult.error ? [] : viewsResult.rows.map((r) => r.name));
+
+			const allTableNames = [...new SvelteSet(columnsResult.rows.map((row) => row.tableName))];
+
+			for (const tableName of allTableNames) {
+				const columns = columnsResult.rows
+					.filter((row) => row.tableName === tableName)
+					.reduce(
+						(acc, { columnName, columnType }) => {
+							acc[columnName] = {
+								name: columnName,
+								type: columnType,
+								jsType: getDuckDBToJsType(columnType)
+							};
+							return acc;
+						},
+						{} as Record<string, IColumnMetadata>
+					);
+
+				this.#tables.set(
+					tableName,
+					new TableMetadata(
+						{
+							name: tableName,
+							columns,
+							tableType: viewNames.has(tableName) ? 'model' : 'table'
+						},
+						this.#tableOpts
+					)
+				);
+			}
+		} catch (e) {
+			logger.error(e, 'Failed to fetch DuckDB metadata');
+			throw new Error('Failed to fetch DuckDB metadata', { cause: e });
 		} finally {
 			this.#loading = false;
 		}

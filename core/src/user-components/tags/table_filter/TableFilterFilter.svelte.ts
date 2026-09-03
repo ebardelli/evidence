@@ -12,7 +12,7 @@ import {
 	STRING_VALUE_OPERATORS
 } from './types';
 import { logger } from '../../../shims/logger';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 type TableFilterAttributes = UserComponentProps<typeof schema>;
 
