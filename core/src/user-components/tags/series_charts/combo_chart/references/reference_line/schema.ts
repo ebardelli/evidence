@@ -12,7 +12,7 @@ import {
 import { ifCondition } from '../../../../../validators/ifCondition';
 import { requiresData } from '../requiresData.validator';
 import type { LineLabelOption } from 'echarts/types/src/util/types.js';
-import z from 'zod';
+import z from 'zod/v3';
 import { isStringNotNumber } from '../isStringNotNumber.validator';
 import { FMT_OPTIONS } from '../../../../../formatValue';
 

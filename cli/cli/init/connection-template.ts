@@ -20,7 +20,8 @@ export const INIT_WAREHOUSES = [
 	'databricks',
 	'postgres',
 	'cube',
-	'motherduck'
+	'motherduck',
+	'duckdb'
 ] as const;
 
 export type InitWarehouse = (typeof INIT_WAREHOUSES)[number];
@@ -132,6 +133,17 @@ token: "<token>" # MotherDuck service/access token (MotherDuck UI: Settings -> A
 # schemas: ["<schema>"] # allowlist of schemas exposed to the schema browser, optional
 `;
 
+const DUCKDB_TEMPLATE = `# DuckDB direct connector — a native, in-process DuckDB instance. Docs: https://docs.evidence.dev/direct-connectors/duckdb
+type: duckdb
+# path: :memory: # or a local .duckdb file path, resolved relative to connection.yaml
+# setup_sql: | # runs once when the client starts — INSTALL/LOAD extensions, CREATE SECRET, ATTACH remote databases
+#   INSTALL httpfs;
+#   LOAD httpfs;
+#   ATTACH 's3://my-bucket/analytics.duckdb' AS s3_analytics (READ_ONLY);
+# setup_sql_path: ./setup.sql # alternative to inlining setup_sql, resolved relative to connection.yaml
+# schemas: ["<schema>"] # allowlist of schemas exposed to the schema browser, optional
+`;
+
 const TEMPLATES: Record<InitWarehouse, string> = {
 	snowflake: SNOWFLAKE_TEMPLATE,
 	bigquery: BIGQUERY_TEMPLATE,
@@ -140,7 +152,8 @@ const TEMPLATES: Record<InitWarehouse, string> = {
 	databricks: DATABRICKS_TEMPLATE,
 	postgres: POSTGRES_TEMPLATE,
 	cube: CUBE_TEMPLATE,
-	motherduck: MOTHERDUCK_TEMPLATE
+	motherduck: MOTHERDUCK_TEMPLATE,
+	duckdb: DUCKDB_TEMPLATE
 };
 
 /** Returns the connection.yaml scaffold for a supported warehouse type. */

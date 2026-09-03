@@ -19,7 +19,7 @@ import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { HEIGHT_ATTRIBUTE } from '../../common/height-attribute';
 import { CONNECT_GROUP_ATTRIBUTE } from '../../common/connect-group-attribute';
 import { ZodAttribute } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { DATA_ATTRIBUTE, TITLE_ATTRIBUTES } from '../../common/title-attributes';
 import { TOOLTIP_FIELDS_ATTRIBUTE, validateTooltipFieldFormats } from '../../common/tooltip-fields';
 import { xAxisOptionsSchema } from '../series_charts/combo_chart/x-axis-options-schema';

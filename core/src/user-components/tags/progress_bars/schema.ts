@@ -15,7 +15,7 @@ import { ifCondition } from '../../validators/ifCondition';
 import { SQL_OPTIONS } from '../../common/sql-options';
 import { WIDTH_ATTRIBUTE } from '../../common/width-attribute';
 import { ZodAttribute, booleanVariableSchema } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { METRIC_ATTRIBUTE } from '../../common/metric-attribute';
 import { validateDataSources, type DataSource } from '../../common/data-sources';
 

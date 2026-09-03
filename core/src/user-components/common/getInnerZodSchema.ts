@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { getZodMetadata } from './zod-metadata';
 
 type Meta<M extends Record<string, unknown>> = {

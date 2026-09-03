@@ -7,7 +7,7 @@ import {
 	BooleanVariable,
 	booleanVariableSchema
 } from '../../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { setZodMetadata } from '../../../common/zod-metadata';
 import { dateRangeSchema } from '../../../common/date-options';
 import {

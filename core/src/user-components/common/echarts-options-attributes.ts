@@ -3,7 +3,7 @@ import merge from 'lodash/merge';
 import type { UserComponentAttribute } from '../types';
 import { ZodAttribute } from './zod-attribute';
 import { setZodMetadata } from './zod-metadata';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * Raw ECharts escape hatches for standalone (single-series) charts —

@@ -19,7 +19,7 @@ import {
 	validateAxisMinMax
 } from '../../../validators';
 import { ZodAttribute } from '../../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
 	TOOLTIP_FIELDS_ATTRIBUTE,
 	validateTooltipFieldFormats

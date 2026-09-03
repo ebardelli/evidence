@@ -10,7 +10,7 @@ import {
 	metricExists
 } from '../../../../validators';
 import { ifCondition } from '../../../../validators/ifCondition';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { setZodMetadata } from '../../../../common/zod-metadata';
 import {
 	TOOLTIP_FIELDS_ATTRIBUTE,

@@ -3,7 +3,7 @@
  * Studio's full ProjectSettings type will satisfy this interface.
  */
 
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { pageDownloadsSchema } from '../../config/page-frontmatter-schema';
 
 /**

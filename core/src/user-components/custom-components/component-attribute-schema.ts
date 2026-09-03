@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
 	ATTRIBUTE_TYPES,
 	CUSTOM_COMPONENT_ATTRIBUTE_TYPES,
