@@ -18,7 +18,7 @@ To authenticate users against your organization's identity provider, deploy `evi
 User ──▶ Authenticating reverse proxy (OIDC / SAML) ──▶ evidence serve
 ```
 
-The proxy is the sole entry point and the authentication boundary; Evidence runs with its built-in authentication disabled. Evidence does not read the authenticated user's identity from the proxy, so reports, queries, and filters are the same for every authenticated user.
+The proxy is the sole entry point and the authentication boundary; Evidence runs with its built-in authentication disabled. Evidence can optionally display the authenticated user's email in the sidebar (see [Displaying the proxy identity](#displaying-the-proxy-identity) below), but this is cosmetic — reports, queries, and filters remain the same for every authenticated user.
 
 <Steps>
   <Step title="Restrict network access to the proxy">
@@ -31,6 +31,19 @@ The proxy is the sole entry point and the authentication boundary; Evidence runs
     Connect the proxy to your identity provider over OIDC or SAML, and scope access to the appropriate users, groups, or domains. Route the proxy to the Evidence deployment.
   </Step>
 </Steps>
+
+## Displaying the proxy identity
+
+Most authenticating proxies forward the signed-in user's identity to the upstream app as request headers — for example oauth2-proxy's `X-Auth-Request-Email`. Evidence can show that identity in the sidebar, in place of the default "Not logged in" state:
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` | Name of the inbound header holding the viewer's email (e.g. `X-Auth-Request-Email`) |
+| `EVIDENCE_AUTH_PROXY_NAME_HEADER` | Optional: name of the inbound header holding a display name (e.g. `X-Auth-Request-User`) |
+
+<Warning>
+  This is purely cosmetic — it only changes what the sidebar displays. It does not authenticate anyone, and it does not scope queries, filters, or reports per user. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity in the sidebar.
+</Warning>
 
 ## Supported proxies and providers
 

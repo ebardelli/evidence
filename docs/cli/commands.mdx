@@ -297,3 +297,5 @@ Requires a direct connector configured in [`connection.yaml`](/cli/connections) 
 To serve beyond localhost, set `EVIDENCE_BASIC_USER` and `EVIDENCE_BASIC_PASSWORD` to protect the site with HTTP Basic Auth. The server refuses to start on a non-localhost `--host` without these set.
 
 On a trusted private network (VPN, Tailscale, internal VPC), `EVIDENCE_AUTH_DISABLED=true` skips authentication entirely.
+
+Behind an authenticating reverse proxy (see [Authentication & SSO](/self-host/authentication)), set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` (and optionally `EVIDENCE_AUTH_PROXY_NAME_HEADER`) to the proxy's forwarded-identity headers to show the signed-in user in the sidebar. This is cosmetic only — it does not authenticate anyone.
