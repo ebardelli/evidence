@@ -10,6 +10,7 @@ import { loadCredentials } from '$lib/auth/credentials.server';
 import { getProjectCwd } from '$lib/server/project-cwd';
 import { isServeMode } from '$lib/server/serve-mode';
 import { connectionYamlHint, resolveConnection } from '$lib/server/run-query';
+import { getProxyUser } from '$lib/server/proxy-auth.server';
 import { loadConnectionConfig } from '$cli/connection';
 import { loadProjectConfig } from '$cli/project-config/load-config';
 import { resolveProjectTheme } from '$lib/server/theme.server';
@@ -60,13 +61,16 @@ async function getOrgInfo(refreshToken: string, storedOrgId: string | null) {
 	return orgCache;
 }
 
-export const load: LayoutServerLoad = async ({ url, cookies }) => {
+export const load: LayoutServerLoad = async ({ url, cookies, request }) => {
 	const cwd = getProjectCwd();
 	const isServe = isServeMode();
 	const navItems = await getNavItems(cwd);
 	// Serve mode ships only with connection.yaml projects, so there is no
 	// Studio session to load and no org lookup to make.
 	const credentials = isServe ? null : await loadCredentials();
+	// Cosmetic sidebar identity forwarded by a fronting authenticating proxy;
+	// see proxy-auth.server.ts for the trust model.
+	const proxyUser = isServe ? getProxyUser(request.headers) : null;
 	let connectionConfig: Awaited<ReturnType<typeof loadConnectionConfig>> = null;
 	let connectionError: string | null = null;
 	try {
@@ -121,7 +125,7 @@ export const load: LayoutServerLoad = async ({ url, cookies }) => {
 		languages,
 		currentLanguage,
 		sidebarWidthPx,
-		user: credentials?.user ?? null,
+		user: credentials?.user ?? proxyUser,
 		organizationId,
 		organizationName,
 		organizations,
