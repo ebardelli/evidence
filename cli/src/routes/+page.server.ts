@@ -15,13 +15,15 @@ import {
 	discoverProjectMetricFiles,
 	hasProjectMetricFiles,
 	projectRootRelativePath,
-	pageDisplayTitle
+	pageDisplayTitle,
+	parsePageAuth
 } from '$lib/markdown/files.server';
 import { cliUsesRelativeResolution } from '$lib/markdown/resolution';
 import { loadCredentials } from '$lib/auth/credentials.server';
 import { getProjectCwd } from '$lib/server/project-cwd';
 import { isServeMode } from '$lib/server/serve-mode';
 import { loadTranslations } from '$lib/server/translations.server';
+import { assertPageAuthorized } from '$lib/server/page-auth.server';
 
 // Track last modified time to detect changes (dev only)
 let lastMtime: number | null = null;
@@ -34,7 +36,7 @@ let serveDiscovery: {
 	metricFiles: Record<string, string>;
 } | null = null;
 
-export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent }) => {
+export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent, request }) => {
 	// Prevent caching so file changes are reflected immediately
 	setHeaders({
 		'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
@@ -49,6 +51,12 @@ export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent })
 	// Get home markdown file from CWD
 	const cwd = getProjectCwd();
 	const homeFile = await getHomeFile(cwd);
+
+	// `auth:` frontmatter gate — serve mode only; dev mode has no reverse-proxy
+	// identity to check against (see page-auth.server.ts).
+	if (isServe && homeFile) {
+		await assertPageAuthorized(parsePageAuth(homeFile.content), request.headers);
+	}
 
 	let markdownData = null;
 	// Metric YAML files are discovered per-page (or emptied when there's no home
