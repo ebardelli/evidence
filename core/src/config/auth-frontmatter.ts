@@ -9,7 +9,8 @@ import { z } from 'zod';
  * `users` and `query` are both optional and additive: a viewer is allowed if
  * their email appears in either list. `query` is a SQL string run server-side
  * against `connection.yaml`; its first result column is read as the allowed
- * emails.
+ * emails. `message` overrides the default "you don't have access" text shown
+ * to a denied viewer.
  */
 export const authSchema = z.object({
 	users: z
@@ -23,6 +24,13 @@ export const authSchema = z.object({
 		.catch(undefined)
 		.describe(
 			"SQL query run server-side against connection.yaml; its first result column is read as allowed emails."
+		),
+	message: z
+		.string()
+		.optional()
+		.catch(undefined)
+		.describe(
+			'Custom message shown to viewers denied access to this page. `{email}` is replaced with the viewer\'s email.'
 		)
 });
 
