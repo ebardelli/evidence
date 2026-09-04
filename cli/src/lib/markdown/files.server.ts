@@ -11,6 +11,7 @@ import {
 	type ParsedProjectRootFrontmatter,
 	type ParsedProjectLayout
 } from '@evidence/core/config/page-frontmatter-schema';
+import type { AuthConfig } from '@evidence/core/config/auth-frontmatter';
 import { compareSidebarPosition } from '@evidence/core/utils/nav-tree';
 import { deslugify } from '@evidence/core/utils/deslugify';
 import type { PageSettings } from '@evidence/core/user-components/interfaces/project-settings';
@@ -87,6 +88,11 @@ export function resolvePageSettings(
 		...(projectLayout ?? {}),
 		...parsePageSettings(content)
 	};
+}
+
+/** A page's `auth:` frontmatter (self-host viewer allowlist), or undefined if unset. */
+export function parsePageAuth(content: string): AuthConfig | undefined {
+	return parsePageFrontmatter(content).auth;
 }
 
 function getMarkdownType(content: string): string {
