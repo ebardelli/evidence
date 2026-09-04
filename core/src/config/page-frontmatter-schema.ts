@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { themeOverridesSchema } from '../types/theme';
 import { availableIconNames } from '../user-components/common/icon-names';
 import { workflowSchema } from './workflow-frontmatter';
+import { authSchema } from './auth-frontmatter';
 
 /**
  * Frontmatter schema for the new structure — identity + page settings. Lenient
@@ -102,7 +103,13 @@ export const projectRootPageFrontmatterSchema = z.object({
 	workflow: workflowSchema
 		.optional()
 		.catch(undefined)
-		.describe('Workflow reporting settings — see `workflow.period` to make this a periodic report.')
+		.describe('Workflow reporting settings — see `workflow.period` to make this a periodic report.'),
+	auth: authSchema
+		.optional()
+		.catch(undefined)
+		.describe(
+			'Self-host only: restrict this page to specific viewers, checked against the reverse-proxy identity. See `auth.users` and `auth.query`.'
+		)
 });
 
 export type ParsedProjectRootFrontmatter = z.infer<typeof projectRootPageFrontmatterSchema>;
