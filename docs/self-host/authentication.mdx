@@ -75,8 +75,19 @@ auth:
 | --- | --- |
 | `auth.users` | Static list of allowed emails. |
 | `auth.query` | SQL query whose first result column is read as allowed emails. Cached for 60 seconds per query. |
+| `auth.message` | Custom message shown to a denied viewer, in place of the default "does not have access" text. `{email}` is replaced with the viewer's email. |
 
 If the frontmatter block is absent, the page is unrestricted (unchanged from default behavior). If it's present, a request without a proxy identity (no `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` configured, or the header missing/blank) is refused with a 403, as is a viewer whose email matches neither list. This check only runs in `evidence serve`; in `evidence dev` there is no proxy identity to check against, so pages render normally for local authoring.
+
+Use `auth.message` to tell a denied viewer how to get access, instead of the generic default:
+
+```md
+---
+auth:
+  users: [alice@example.com]
+  message: "{email} isn't on the Finance team. Ask in #finance-access for a share."
+---
+```
 
 ## Supported proxies and providers
 
