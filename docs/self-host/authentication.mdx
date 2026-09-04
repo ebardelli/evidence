@@ -9,7 +9,7 @@ A self-hosted Evidence deployment ([`evidence serve`](/cli/commands#evidence-ser
 To authenticate users against your organization's identity provider, deploy `evidence serve` behind an authenticating reverse proxy (also known as an identity-aware proxy). The proxy integrates with your identity provider over OIDC or SAML, enforces sign-in on every request, and forwards only authenticated traffic to Evidence.
 
 <Warning>
-  Authentication controls who can reach the deployment; it does not scope what each user sees. Every authenticated user is served the same reports, queried against the single warehouse identity defined in [`connection.yaml`](/cli/connections). Self-hosted deployments do not enforce per-report [access control](/features/page-level-access-control) or [row-level security](/features/access-rules) — those are applied against a per-viewer identity available only in [Evidence Studio](/self-host#self-host-vs-evidence-studio). Deployments that require differentiated access to reports or data should use Evidence Studio.
+  Authentication controls who can reach the deployment; by default it does not scope what each user sees. Every authenticated user is served the same reports, queried against the single warehouse identity defined in [`connection.yaml`](/cli/connections). Upstream self-hosted deployments do not enforce per-report [access control](/features/page-level-access-control) or [row-level security](/features/access-rules) — those are applied against a per-viewer identity available only in [Evidence Studio](/self-host#self-host-vs-evidence-studio). This deployment's fork adds one narrow exception, a page-visibility allowlist described in [Restricting individual pages to an allowlist](#restricting-individual-pages-to-an-allowlist) below — it does not scope query results, so it is still not a substitute for Studio. Deployments that need real per-viewer report or row scoping should use Evidence Studio.
 </Warning>
 
 ## Architecture
@@ -44,6 +44,39 @@ Most authenticating proxies forward the signed-in user's identity to the upstrea
 <Warning>
   This is purely cosmetic — it only changes what the sidebar displays. It does not authenticate anyone, and it does not scope queries, filters, or reports per user. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity in the sidebar.
 </Warning>
+
+## Restricting individual pages to an allowlist
+
+<Warning>
+  This is a local extension on this deployment's fork of Evidence — it is not part of upstream Evidence and will not appear in other Evidence deployments. It is **not** a substitute for [Evidence Studio's](/self-host#self-host-vs-evidence-studio) per-viewer [page-level access control](/features/page-level-access-control) or [row-level security](/features/access-rules): those apply against a verified per-viewer identity and can scope both which reports a viewer sees and which rows they see within a report. This extension only compares the proxy-forwarded email header against an allowlist — it inherits the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above (the header must not be spoofable, so Evidence must be reachable exclusively through the proxy), and it does **not** scope query results — every allowed viewer sees the same data. Deployments that need real per-viewer report or row scoping should use Evidence Studio.
+</Warning>
+
+A page can be gated to a specific set of viewer emails with an `auth:` block in its frontmatter, checked against the same proxy-forwarded identity used for the sidebar:
+
+```md
+---
+title: Finance summary
+auth:
+  users: [alice@example.com, bob@example.com]
+---
+```
+
+Add `query` to also allow anyone returned by a SQL query (run server-side against `connection.yaml`; the first result column is read as the allowed emails). `users` and `query` are additive — a viewer is allowed if their email appears in either:
+
+```md
+---
+auth:
+  users: [alice@example.com]
+  query: select email from allowed_users where page = 'finance'
+---
+```
+
+| Field | Purpose |
+| --- | --- |
+| `auth.users` | Static list of allowed emails. |
+| `auth.query` | SQL query whose first result column is read as allowed emails. Cached for 60 seconds per query. |
+
+If the frontmatter block is absent, the page is unrestricted (unchanged from default behavior). If it's present, a request without a proxy identity (no `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` configured, or the header missing/blank) is refused with a 403, as is a viewer whose email matches neither list. This check only runs in `evidence serve`; in `evidence dev` there is no proxy identity to check against, so pages render normally for local authoring.
 
 ## Supported proxies and providers
 
