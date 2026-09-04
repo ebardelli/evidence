@@ -1,3 +1,42 @@
 packages:
   - 'core'
   - 'cli'
+
+overrides:
+  '@opentelemetry/core': '>=2.8.0'
+  zod: '>=3.24.2 <4'
+  lodash: '>=4.18.1'
+  lodash-es: '>=4.18.1'
+  lodash-amd: '>=4.18.1'
+  lodash.template: '>=4.18.1'
+  minimatch: '>=10.2.4'
+  '@isaacs/brace-expansion': '>=5.0.1'
+  tar: '>=7.5.22'
+  axios: '>=1.18.0'
+  esbuild: '>=0.28.1'
+  undici: '>=8.9.0'
+  '@codemirror/state': '>=6.6.0'
+  cookie: '>=0.7.2'
+  protobufjs: '>=8.6.6'
+  path-to-regexp: '>=8.4.2'
+  qs: '>=6.14.2'
+  fast-xml-parser: '>=5.7.0'
+  ip-address: '>=10.7.0'
+  form-data: '>=2.5.6'
+  hono: '>=4.12.25'
+  postcss: '>=8.5.18'
+  nanoid: '>=3.3.17'
+  joi: '>=17.13.4'
+  thrift: '>=0.23.0'
+  unzipper: '>=0.12.5'
+  uuid: '>=11.1.1 <12'
+  vite: '>=7.3.5 <8'
+  dompurify: '>=3.4.13'
+  fast-uri: '>=3.1.5'
+  brace-expansion: '>=5.0.9'
+  ts-deepmerge: '>=8.0.0'
+
+patchedDependencies:
+  ssf: patches/ssf.patch
+  echarts@6.1.0: patches/echarts@6.1.0.patch
+  zrender: patches/zrender.patch
