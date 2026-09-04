@@ -52,7 +52,9 @@ async function resolveQueryEmails(sql: string): Promise<string[]> {
 
 /**
  * Throws a SvelteKit 403 if `auth` restricts this page and the reverse-proxy
- * viewer isn't allowed. No-op when `auth` is absent/empty.
+ * viewer isn't allowed. No-op when `auth` is absent/empty. The denial message
+ * is `auth.message` when set (with `{email}` substituted), otherwise a
+ * generic default — rendered by `routes/+error.svelte`.
  */
 export async function assertPageAuthorized(
 	auth: AuthConfig | undefined,
@@ -70,6 +72,9 @@ export async function assertPageAuthorized(
 	const queryAllowed = auth.query ? await resolveQueryEmails(auth.query) : [];
 
 	if (!staticAllowed.includes(viewerEmail) && !queryAllowed.includes(viewerEmail)) {
-		error(403, `${proxyUser.email} does not have access to this page.`);
+		const message = auth.message
+			? auth.message.replaceAll('{email}', proxyUser.email)
+			: `${proxyUser.email} does not have access to this page.`;
+		error(403, message);
 	}
 }
