@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getProxyUser } from '$lib/server/proxy-auth.server';
+import { getProxyUser, getAccountVariables } from '$lib/server/proxy-auth.server';
 
 const ENV_KEYS = ['EVIDENCE_AUTH_PROXY_EMAIL_HEADER', 'EVIDENCE_AUTH_PROXY_NAME_HEADER'] as const;
 
@@ -72,5 +72,40 @@ describe('getProxyUser', () => {
 		process.env.EVIDENCE_AUTH_PROXY_NAME_HEADER = 'X-Auth-Request-User';
 		const headers = new Headers({ 'X-Auth-Request-Email': 'jane@example.com' });
 		expect(getProxyUser(headers)?.firstName).toBeNull();
+	});
+});
+
+describe('getAccountVariables', () => {
+	let saved: ReturnType<typeof saveEnv>;
+	beforeEach(() => {
+		saved = saveEnv();
+		for (const k of ENV_KEYS) delete process.env[k];
+	});
+	afterEach(() => restoreEnv(saved));
+
+	it('returns undefined when there is no proxy identity', () => {
+		expect(getAccountVariables(new Headers())).toBeUndefined();
+	});
+
+	it('puts the whole display name in first_name, with last_name always null', () => {
+		process.env.EVIDENCE_AUTH_PROXY_EMAIL_HEADER = 'X-Auth-Request-Email';
+		process.env.EVIDENCE_AUTH_PROXY_NAME_HEADER = 'X-Auth-Request-User';
+		const headers = new Headers({
+			'X-Auth-Request-Email': 'jane@example.com',
+			'X-Auth-Request-User': 'Jane Doe'
+		});
+		expect(getAccountVariables(headers)).toEqual({
+			user: { email: 'jane@example.com', first_name: 'Jane Doe', last_name: null },
+			organization: { name: '' }
+		});
+	});
+
+	it('leaves first_name null when no name header is configured', () => {
+		process.env.EVIDENCE_AUTH_PROXY_EMAIL_HEADER = 'X-Auth-Request-Email';
+		const headers = new Headers({ 'X-Auth-Request-Email': 'jane@example.com' });
+		expect(getAccountVariables(headers)).toEqual({
+			user: { email: 'jane@example.com', first_name: null, last_name: null },
+			organization: { name: '' }
+		});
 	});
 });
