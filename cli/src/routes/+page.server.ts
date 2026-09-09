@@ -24,6 +24,7 @@ import { getProjectCwd } from '$lib/server/project-cwd';
 import { isServeMode } from '$lib/server/serve-mode';
 import { loadTranslations } from '$lib/server/translations.server';
 import { assertPageAuthorized } from '$lib/server/page-auth.server';
+import { getAccountVariables } from '$lib/server/proxy-auth.server';
 
 // Track last modified time to detect changes (dev only)
 let lastMtime: number | null = null;
@@ -47,6 +48,9 @@ export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent, r
 		isServe ? null : loadCredentials(),
 		parent()
 	]);
+	// `{{ $user.* }}` in markdown/SQL — serve mode only; dev mode has no
+	// reverse-proxy identity to source it from (see proxy-auth.server.ts).
+	const account = isServe ? getAccountVariables(request.headers) : undefined;
 
 	// Get home markdown file from CWD
 	const cwd = getProjectCwd();
@@ -135,7 +139,8 @@ export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent, r
 				customComponents,
 				basePath,
 				useRelativeResolution,
-				translations
+				translations,
+				account
 			});
 		markdownData = {
 			serializedTree: serializeTree(tree),
