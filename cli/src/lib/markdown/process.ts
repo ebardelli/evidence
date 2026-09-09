@@ -17,6 +17,7 @@ import type { Metadata } from '@evidence/core/metadata/Metadata.svelte';
 import { InlineQueryMetadata } from '@evidence/core/metadata/inline-query-metadata.svelte';
 import type { QueryService } from '@evidence/core/user-components/interfaces/query-service';
 import type { TranslationMap } from '@evidence/core/types/translations';
+import type { AccountVariables } from '@evidence/core/types/account-variables';
 import { preprocessVariables } from '@evidence/core/user-components/Renderer/MarkdocProcessor/preprocess-variables';
 import { registerFiltersFromAST } from '@evidence/core/user-components/Renderer/MarkdocProcessor/register-filters';
 import { rewriteSqlFenceTranslationTokens } from '@evidence/core/user-components/Renderer/MarkdocProcessor/rewrite-bare-translation-sql';
@@ -63,6 +64,9 @@ export interface ProcessOptions {
 	/** Resolved translations (translations.yaml) for the current language, exposed
 	 * to markdown as the `$translations` variable. */
 	translations?: TranslationMap;
+	/** Reverse-proxy viewer identity, exposed to markdown/SQL as `$user`/`$organization`
+	 * (see proxy-auth.server.ts's getAccountVariables). Serve mode only. */
+	account?: AccountVariables;
 }
 
 export interface Processed {
@@ -137,7 +141,7 @@ export async function process(markdown: string, options: ProcessOptions = {}): P
 		validationContext,
 		options.partials,
 		options.translations,
-		undefined,
+		options.account,
 		undefined,
 		options.customComponents
 	);

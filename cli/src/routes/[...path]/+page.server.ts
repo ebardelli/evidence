@@ -30,6 +30,7 @@ import { resolvePageTheme } from '$lib/server/theme.server';
 import { resolveProjectSettings } from '$lib/server/project-settings.server';
 import { ServerQueryService } from '$lib/server/ServerQueryService';
 import { assertPageAuthorized } from '$lib/server/page-auth.server';
+import { getAccountVariables } from '$lib/server/proxy-auth.server';
 
 // Track last modified times per slug
 const lastMtimes = new Map<string, number>();
@@ -96,6 +97,9 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 	const cwd = getProjectCwd();
 	const slug = params.path;
 	const isServe = isServeMode();
+	// `{{ $user.* }}` in markdown/SQL — serve mode only; dev mode has no
+	// reverse-proxy identity to source it from (see proxy-auth.server.ts).
+	const account = isServe ? getAccountVariables(request.headers) : undefined;
 
 	// `.catch` so a malformed evidence.config.yaml degrades to no project layout
 	// defaults rather than 500-ing the page (mirrors Studio's graceful read).
@@ -168,7 +172,8 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 			customComponents,
 			basePath,
 			useRelativeResolution,
-			translations
+			translations,
+			account
 		});
 
 	return {
