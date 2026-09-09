@@ -45,6 +45,32 @@ Most authenticating proxies forward the signed-in user's identity to the upstrea
   This is purely cosmetic — it only changes what the sidebar displays. It does not authenticate anyone, and it does not scope queries, filters, or reports per user. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity in the sidebar.
 </Warning>
 
+## Using the proxy identity in markdown and SQL
+
+<Warning>
+  This is a local extension on this deployment's fork of Evidence — not part of upstream Evidence. It's convenience/personalization only: it interpolates plain text into markdown and query strings, the same as any other [frontmatter variable](/core-concepts/variables). It is **not** row-level security — nothing stops a page author from omitting a `$user` filter, and nothing scopes results the way [Evidence Studio's row-level security](/features/access-rules) does. It relies on the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above.
+</Warning>
+
+When the same proxy headers used above are configured, the reverse-proxy identity is also exposed to markdown and SQL as [built-in variables](/core-concepts/variables#built-in-variables), the same `{{ $user.* }}` syntax upstream Evidence uses for a Studio-logged-in viewer:
+
+```md
+Welcome, {{ $user.email }}.
+```
+
+```sql my_data
+select * from orders where owner_email = '{{ $user.email }}'
+```
+
+| Variable | Source |
+| --- | --- |
+| `{{ $user.email }}` | `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` |
+| `{{ $user.first_name }}` | `EVIDENCE_AUTH_PROXY_NAME_HEADER`, if configured — most proxies forward a single display name rather than separate first/last names, so the whole value lands here |
+| `{{ $user.last_name }}` | Always empty — no header supplies it |
+
+`{{ $organization.name }}` is also always empty; self-host has no organization concept to source it from.
+
+This only resolves in `evidence serve`; in `evidence dev` there is no proxy identity, so `{{ $user.* }}` renders blank and does not fail validation (matching how the same variables behave in an embedded view with no signed-in viewer).
+
 ## Restricting individual pages to an allowlist
 
 <Warning>
