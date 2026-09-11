@@ -110,39 +110,87 @@ const EXPORT_FONT_SCALE_VAR = '--png-export-font-scale';
 // and the taller the source image the more aggressively it gets shrunk —
 // so text in long reports ends up looking much smaller than in short ones.
 // Bumping the font size for tall captures compensates for that shrink.
-const TALL_ASPECT_RATIO_THRESHOLD = 2; // height:width ratio where scaling starts
-const MAX_EXPORT_FONT_SCALE = 1.5;
-const EXPORT_FONT_SCALE_PER_EXTRA_RATIO = 0.08;
+//
+// How much to bump it can't be a fixed formula: growing the font only helps
+// if it grows the content's height *less* than proportionally. Chart/table
+// blocks are mostly fixed-pixel, so their height barely reacts to font size —
+// scaling always helps there. Reflowing paragraph text is the opposite: fewer
+// characters fit per line, so it wraps into more lines, and total text height
+// grows roughly with the *square* of the font scale — past a point, growing
+// the font further only makes the image taller without making the eventual
+// (shrunk-to-fit) text any bigger. Since the mix of chart/table vs. prose
+// differs per report, we probe empirically instead of guessing: try
+// increasing scales, remeasure the real rendered height each time, and track
+// `scale / height` (proportional to how large the text will still look once
+// the exported image is shrunk to fit a fixed-size viewing frame). Keep
+// climbing while that keeps improving; stop as soon as it plateaus or drops.
+const TALL_ASPECT_RATIO_THRESHOLD = 2; // height:width ratio where probing starts
+const EXPORT_FONT_SCALE_STEP = 1.25;
+const MAX_EXPORT_FONT_SCALE = 4; // sanity backstop, not a target — probing usually stops earlier
+const MAX_SCALE_ITERATIONS = 8; // 1.25^8 ≈ 6x, comfortably clamps to MAX_EXPORT_FONT_SCALE
+// Conservative cross-browser canvas pixel budget (device px, post pixelRatio).
+// Chrome tolerates far larger canvases; Safari/Firefox are the tighter real-world
+// constraints, so this only bounds the EXTRA height our own scaling adds — it
+// doesn't attempt to rescue a report that's already this tall at its natural size.
+const MAX_CAPTURE_DEVICE_HEIGHT_PX = 14000;
 
-function computeExportFontScale(width: number, height: number): number {
-	if (width <= 0 || height <= 0) return 1;
-	const aspectRatio = height / width;
-	if (aspectRatio <= TALL_ASPECT_RATIO_THRESHOLD) return 1;
-	const extraRatio = aspectRatio - TALL_ASPECT_RATIO_THRESHOLD;
-	return Math.min(MAX_EXPORT_FONT_SCALE, 1 + extraRatio * EXPORT_FONT_SCALE_PER_EXTRA_RATIO);
+function legibilityMetric(scale: number, height: number): number {
+	return scale / height;
 }
 
 /**
- * Scales up report text for long (tall) captures before measuring the final
- * capture size, so `fn` sees the rect that will actually be rasterized.
+ * Empirically probes tall captures for a font scale that makes the exported
+ * text look larger once the image gets shrunk to fit a normal viewing frame,
+ * then hands `fn` the rect that will actually be rasterized at that scale.
  * Reverts the scale afterwards regardless of outcome.
  */
 async function withExportFontScale<T>(
 	target: HTMLElement,
+	pixelRatio: number,
 	fn: (rect: { width: number; height: number }) => Promise<T>
 ): Promise<T> {
 	const naturalRect = target.getBoundingClientRect();
-	const scale = computeExportFontScale(naturalRect.width, naturalRect.height);
 
-	if (scale === 1) {
+	const tooShortToBother =
+		naturalRect.width <= 0 ||
+		naturalRect.height <= 0 ||
+		naturalRect.height / naturalRect.width <= TALL_ASPECT_RATIO_THRESHOLD;
+
+	let bestScale = 1;
+	let bestRect = naturalRect;
+
+	if (!tooShortToBother) {
+		let bestMetric = legibilityMetric(1, naturalRect.height);
+
+		for (let i = 1; i <= MAX_SCALE_ITERATIONS; i++) {
+			const candidateScale = Math.min(MAX_EXPORT_FONT_SCALE, EXPORT_FONT_SCALE_STEP ** i);
+			target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(candidateScale));
+			void target.offsetHeight; // force reflow so the rect below reflects this scale
+			const candidateRect = target.getBoundingClientRect();
+
+			if (candidateRect.height * pixelRatio > MAX_CAPTURE_DEVICE_HEIGHT_PX) break;
+
+			const candidateMetric = legibilityMetric(candidateScale, candidateRect.height);
+			if (candidateMetric <= bestMetric) break; // further growth stops paying off
+
+			bestScale = candidateScale;
+			bestRect = candidateRect;
+			bestMetric = candidateMetric;
+
+			if (candidateScale >= MAX_EXPORT_FONT_SCALE) break;
+		}
+	}
+
+	if (bestScale === 1) {
+		target.style.removeProperty(EXPORT_FONT_SCALE_VAR);
 		return fn(naturalRect);
 	}
 
-	target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(scale));
-	void target.offsetHeight; // force reflow so the rect below reflects the scaled font size
+	target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(bestScale));
+	void target.offsetHeight;
 
 	try {
-		return await fn(target.getBoundingClientRect());
+		return await fn(bestRect);
 	} finally {
 		target.style.removeProperty(EXPORT_FONT_SCALE_VAR);
 	}
@@ -213,7 +261,7 @@ export async function downloadPng(options: PngDownloadOptions): Promise<void> {
 
 		const pixelRatio = 2;
 		const dataUrl = await withCaptureStyles(target, () =>
-			withExportFontScale(target, (rect) => {
+			withExportFontScale(target, pixelRatio, (rect) => {
 				const captureWidth = Math.ceil(rect.width) + padding * 2;
 				const captureHeight = Math.ceil(rect.height) + padding * 2;
 
