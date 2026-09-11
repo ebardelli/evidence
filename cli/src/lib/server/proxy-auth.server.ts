@@ -19,6 +19,7 @@ export interface ProxyUser {
 	id: string;
 	email: string;
 	firstName?: string | null;
+	profilePictureUrl?: string | null;
 }
 
 export function getProxyUser(headers: Headers): ProxyUser | null {
