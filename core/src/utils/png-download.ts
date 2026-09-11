@@ -101,6 +101,53 @@ async function withSandboxedIframesReplaced<T>(
 	}
 }
 
+const EXPORT_FONT_SCALE_VAR = '--png-export-font-scale';
+
+// A report captured at its natural font size renders every page at the same
+// absolute pixel size, so a long report just produces a very tall, narrow
+// image. Whatever the image is eventually viewed in (an image viewer, a
+// slide, a chat preview) will scale that whole image down to fit its frame,
+// and the taller the source image the more aggressively it gets shrunk —
+// so text in long reports ends up looking much smaller than in short ones.
+// Bumping the font size for tall captures compensates for that shrink.
+const TALL_ASPECT_RATIO_THRESHOLD = 2; // height:width ratio where scaling starts
+const MAX_EXPORT_FONT_SCALE = 1.5;
+const EXPORT_FONT_SCALE_PER_EXTRA_RATIO = 0.08;
+
+function computeExportFontScale(width: number, height: number): number {
+	if (width <= 0 || height <= 0) return 1;
+	const aspectRatio = height / width;
+	if (aspectRatio <= TALL_ASPECT_RATIO_THRESHOLD) return 1;
+	const extraRatio = aspectRatio - TALL_ASPECT_RATIO_THRESHOLD;
+	return Math.min(MAX_EXPORT_FONT_SCALE, 1 + extraRatio * EXPORT_FONT_SCALE_PER_EXTRA_RATIO);
+}
+
+/**
+ * Scales up report text for long (tall) captures before measuring the final
+ * capture size, so `fn` sees the rect that will actually be rasterized.
+ * Reverts the scale afterwards regardless of outcome.
+ */
+async function withExportFontScale<T>(
+	target: HTMLElement,
+	fn: (rect: { width: number; height: number }) => Promise<T>
+): Promise<T> {
+	const naturalRect = target.getBoundingClientRect();
+	const scale = computeExportFontScale(naturalRect.width, naturalRect.height);
+
+	if (scale === 1) {
+		return fn(naturalRect);
+	}
+
+	target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(scale));
+	void target.offsetHeight; // force reflow so the rect below reflects the scaled font size
+
+	try {
+		return await fn(target.getBoundingClientRect());
+	} finally {
+		target.style.removeProperty(EXPORT_FONT_SCALE_VAR);
+	}
+}
+
 function resolveBackgroundColor(target: HTMLElement): string {
 	let el: HTMLElement | null = target;
 	while (el) {
@@ -164,22 +211,23 @@ export async function downloadPng(options: PngDownloadOptions): Promise<void> {
 	try {
 		const backgroundColor = resolveBackgroundColor(target);
 
-		const rect = target.getBoundingClientRect();
-		const captureWidth = Math.ceil(rect.width) + padding * 2;
-		const captureHeight = Math.ceil(rect.height) + padding * 2;
-
 		const pixelRatio = 2;
 		const dataUrl = await withCaptureStyles(target, () =>
-			withSandboxedIframesReplaced(target, pixelRatio, () =>
-				toPng(target, {
-					pixelRatio,
-					cacheBust: true,
-					backgroundColor,
-					width: padding > 0 ? captureWidth : undefined,
-					height: padding > 0 ? captureHeight : undefined,
-					style: padding > 0 ? { padding: `${padding}px`, boxSizing: 'border-box' } : undefined
-				})
-			)
+			withExportFontScale(target, (rect) => {
+				const captureWidth = Math.ceil(rect.width) + padding * 2;
+				const captureHeight = Math.ceil(rect.height) + padding * 2;
+
+				return withSandboxedIframesReplaced(target, pixelRatio, () =>
+					toPng(target, {
+						pixelRatio,
+						cacheBust: true,
+						backgroundColor,
+						width: padding > 0 ? captureWidth : undefined,
+						height: padding > 0 ? captureHeight : undefined,
+						style: padding > 0 ? { padding: `${padding}px`, boxSizing: 'border-box' } : undefined
+					})
+				);
+			})
 		);
 
 		const a = document.createElement('a');

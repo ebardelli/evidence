@@ -40,10 +40,14 @@
 <!-- baseFontSize scales the report text. Use `em` (relative to the inherited
 	 size), not `rem`: an absolute 1rem reset would force 16px onto the Renderer
 	 wherever it's embedded in a smaller-font host (e.g. the AI chat at 12.5px).
-	 On report pages the host is 16px, so this resolves to the same value. -->
+	 On report pages the host is 16px, so this resolves to the same value.
+
+	 --png-export-font-scale is set transiently by png-download.ts on long
+	 reports, so exported text stays legible once the (very tall) image gets
+	 shrunk to fit a normal viewing frame. -->
 <div
 	class="*:space-y-block-gap font-sans"
-	style="font-size: calc(var(--theme-font-scale, 1) * 1em);"
+	style="font-size: calc(var(--theme-font-scale, 1) * var(--png-export-font-scale, 1) * 1em);"
 	data-markdoc-content
 	bind:this={rootEl}
 >

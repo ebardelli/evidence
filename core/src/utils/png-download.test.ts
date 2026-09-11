@@ -67,4 +67,66 @@ describe('downloadPng', () => {
 		expect(image.getAttribute('sizes')).toBe('100vw');
 		expect(clickSpy).toHaveBeenCalledOnce();
 	});
+
+	it('leaves font size untouched for normal aspect-ratio captures', async () => {
+		const { downloadPng } = await import('./png-download');
+		const target = document.createElement('div');
+		target.setAttribute('data-markdoc-content', '');
+		Object.defineProperty(target, 'getBoundingClientRect', {
+			value: () => ({ width: 800, height: 600 })
+		});
+		document.body.appendChild(target);
+
+		let scaleDuringCapture: string | null = null;
+		toPngMock.mockImplementation((el: HTMLElement) => {
+			scaleDuringCapture = el.style.getPropertyValue('--png-export-font-scale');
+			return Promise.resolve('data:image/png;base64,capture');
+		});
+
+		await downloadPng({ filename: 'report' });
+
+		expect(scaleDuringCapture).toBe('');
+		expect(target.style.getPropertyValue('--png-export-font-scale')).toBe('');
+		expect(toPngMock).toHaveBeenCalledWith(
+			target,
+			expect.objectContaining({ width: 820, height: 620 })
+		);
+	});
+
+	it('scales up font size for tall captures, then measures and reverts', async () => {
+		const { downloadPng } = await import('./png-download');
+		const target = document.createElement('div');
+		target.setAttribute('data-markdoc-content', '');
+
+		const naturalWidth = 800;
+		const naturalHeight = 4000; // height:width = 5, above the scale-up threshold
+		const scaledHeight = 4800; // simulates the reflow once the font grows
+
+		Object.defineProperty(target, 'getBoundingClientRect', {
+			value: () => {
+				const scaled = target.style.getPropertyValue('--png-export-font-scale') !== '';
+				return { width: naturalWidth, height: scaled ? scaledHeight : naturalHeight };
+			}
+		});
+		document.body.appendChild(target);
+
+		let scaleDuringCapture: string | null = null;
+		toPngMock.mockImplementation((el: HTMLElement) => {
+			scaleDuringCapture = el.style.getPropertyValue('--png-export-font-scale');
+			return Promise.resolve('data:image/png;base64,capture');
+		});
+
+		await downloadPng({ filename: 'report' });
+
+		expect(scaleDuringCapture).not.toBe('');
+		expect(Number(scaleDuringCapture)).toBeGreaterThan(1);
+		expect(target.style.getPropertyValue('--png-export-font-scale')).toBe('');
+		expect(toPngMock).toHaveBeenCalledWith(
+			target,
+			expect.objectContaining({
+				width: Math.ceil(naturalWidth) + 20,
+				height: Math.ceil(scaledHeight) + 20
+			})
+		);
+	});
 });
