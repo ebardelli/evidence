@@ -101,99 +101,38 @@ async function withSandboxedIframesReplaced<T>(
 	}
 }
 
-const EXPORT_FONT_SCALE_VAR = '--png-export-font-scale';
-
-// A report captured at its natural font size renders every page at the same
+// A report captured at its natural size renders every page at the same
 // absolute pixel size, so a long report just produces a very tall, narrow
 // image. Whatever the image is eventually viewed in (an image viewer, a
 // slide, a chat preview) will scale that whole image down to fit its frame,
-// and the taller the source image the more aggressively it gets shrunk —
-// so text in long reports ends up looking much smaller than in short ones.
-// Bumping the font size for tall captures compensates for that shrink.
+// and the taller the source image the more aggressively it gets shrunk — so
+// text in long reports ends up looking much smaller than in short ones.
 //
-// How much to bump it can't be a fixed formula: growing the font only helps
-// if it grows the content's height *less* than proportionally. Chart/table
-// blocks are mostly fixed-pixel, so their height barely reacts to font size —
-// scaling always helps there. Reflowing paragraph text is the opposite: fewer
-// characters fit per line, so it wraps into more lines, and total text height
-// grows roughly with the *square* of the font scale — past a point, growing
-// the font further only makes the image taller without making the eventual
-// (shrunk-to-fit) text any bigger. Since the mix of chart/table vs. prose
-// differs per report, we probe empirically instead of guessing: try
-// increasing scales, remeasure the real rendered height each time, and track
-// `scale / height` (proportional to how large the text will still look once
-// the exported image is shrunk to fit a fixed-size viewing frame). Keep
-// climbing while that keeps improving; stop as soon as it plateaus or drops.
-const TALL_ASPECT_RATIO_THRESHOLD = 2; // height:width ratio where probing starts
-const EXPORT_FONT_SCALE_STEP = 1.25;
-const MAX_EXPORT_FONT_SCALE = 4; // sanity backstop, not a target — probing usually stops earlier
-const MAX_SCALE_ITERATIONS = 8; // 1.25^8 ≈ 6x, comfortably clamps to MAX_EXPORT_FONT_SCALE
-// Conservative cross-browser canvas pixel budget (device px, post pixelRatio).
-// Chrome tolerates far larger canvases; Safari/Firefox are the tighter real-world
-// constraints, so this only bounds the EXTRA height our own scaling adds — it
-// doesn't attempt to rescue a report that's already this tall at its natural size.
-const MAX_CAPTURE_DEVICE_HEIGHT_PX = 14000;
+// This can't be fixed by bumping the report's CSS font-size: chart text
+// (axis labels, legends, data labels) is drawn by ECharts as literal pixel
+// values baked into canvas/SVG draw calls, entirely outside the page's
+// font-size/em cascade — no CSS change can ever reach it, and JS-mode charts
+// additionally render inside a sandboxed iframe with its own document. Doing
+// that made prose/headings balloon while chart text stayed frozen, an
+// obvious mismatch.
+//
+// Instead we zoom the whole rendered capture: html-to-image renders the page
+// into an SVG at its natural size, then (via `canvasWidth`/`canvasHeight`)
+// draws that into a larger final canvas — the same mechanism `pixelRatio`
+// already uses for crisp retina exports. HTML text and other vector content
+// re-rasterizes crisply at the larger size; already-rasterized content
+// (chart <canvas> bitmaps) gets stretched, so at moderate zoom that's a light
+// softening rather than a visible mismatch — everything grows together.
+const TALL_ASPECT_RATIO_THRESHOLD = 1.5; // height:width ratio where zooming starts
+const EXPORT_ZOOM_PER_EXTRA_RATIO = 0.25;
+const MAX_EXPORT_ZOOM = 2.5; // beyond this, upscaling chart bitmaps gets visibly blurry
 
-function legibilityMetric(scale: number, height: number): number {
-	return scale / height;
-}
-
-/**
- * Empirically probes tall captures for a font scale that makes the exported
- * text look larger once the image gets shrunk to fit a normal viewing frame,
- * then hands `fn` the rect that will actually be rasterized at that scale.
- * Reverts the scale afterwards regardless of outcome.
- */
-async function withExportFontScale<T>(
-	target: HTMLElement,
-	pixelRatio: number,
-	fn: (rect: { width: number; height: number }) => Promise<T>
-): Promise<T> {
-	const naturalRect = target.getBoundingClientRect();
-
-	const tooShortToBother =
-		naturalRect.width <= 0 ||
-		naturalRect.height <= 0 ||
-		naturalRect.height / naturalRect.width <= TALL_ASPECT_RATIO_THRESHOLD;
-
-	let bestScale = 1;
-	let bestRect = naturalRect;
-
-	if (!tooShortToBother) {
-		let bestMetric = legibilityMetric(1, naturalRect.height);
-
-		for (let i = 1; i <= MAX_SCALE_ITERATIONS; i++) {
-			const candidateScale = Math.min(MAX_EXPORT_FONT_SCALE, EXPORT_FONT_SCALE_STEP ** i);
-			target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(candidateScale));
-			void target.offsetHeight; // force reflow so the rect below reflects this scale
-			const candidateRect = target.getBoundingClientRect();
-
-			if (candidateRect.height * pixelRatio > MAX_CAPTURE_DEVICE_HEIGHT_PX) break;
-
-			const candidateMetric = legibilityMetric(candidateScale, candidateRect.height);
-			if (candidateMetric <= bestMetric) break; // further growth stops paying off
-
-			bestScale = candidateScale;
-			bestRect = candidateRect;
-			bestMetric = candidateMetric;
-
-			if (candidateScale >= MAX_EXPORT_FONT_SCALE) break;
-		}
-	}
-
-	if (bestScale === 1) {
-		target.style.removeProperty(EXPORT_FONT_SCALE_VAR);
-		return fn(naturalRect);
-	}
-
-	target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(bestScale));
-	void target.offsetHeight;
-
-	try {
-		return await fn(bestRect);
-	} finally {
-		target.style.removeProperty(EXPORT_FONT_SCALE_VAR);
-	}
+function computeExportZoom(width: number, height: number): number {
+	if (width <= 0 || height <= 0) return 1;
+	const aspectRatio = height / width;
+	if (aspectRatio <= TALL_ASPECT_RATIO_THRESHOLD) return 1;
+	const extraRatio = aspectRatio - TALL_ASPECT_RATIO_THRESHOLD;
+	return Math.min(MAX_EXPORT_ZOOM, 1 + extraRatio * EXPORT_ZOOM_PER_EXTRA_RATIO);
 }
 
 function resolveBackgroundColor(target: HTMLElement): string {
@@ -259,23 +198,28 @@ export async function downloadPng(options: PngDownloadOptions): Promise<void> {
 	try {
 		const backgroundColor = resolveBackgroundColor(target);
 
-		const pixelRatio = 2;
-		const dataUrl = await withCaptureStyles(target, () =>
-			withExportFontScale(target, pixelRatio, (rect) => {
-				const captureWidth = Math.ceil(rect.width) + padding * 2;
-				const captureHeight = Math.ceil(rect.height) + padding * 2;
+		const rect = target.getBoundingClientRect();
+		const captureWidth = Math.ceil(rect.width) + padding * 2;
+		const captureHeight = Math.ceil(rect.height) + padding * 2;
+		const zoom = computeExportZoom(rect.width, rect.height);
 
-				return withSandboxedIframesReplaced(target, pixelRatio, () =>
-					toPng(target, {
-						pixelRatio,
-						cacheBust: true,
-						backgroundColor,
-						width: padding > 0 ? captureWidth : undefined,
-						height: padding > 0 ? captureHeight : undefined,
-						style: padding > 0 ? { padding: `${padding}px`, boxSizing: 'border-box' } : undefined
-					})
-				);
-			})
+		const pixelRatio = 2;
+		// Sandboxed (JS-mode) charts render their own capture natively, so ask
+		// for it at the final effective resolution directly — crisp, unlike the
+		// canvasWidth/canvasHeight stretch that the rest of the page goes through.
+		const dataUrl = await withCaptureStyles(target, () =>
+			withSandboxedIframesReplaced(target, pixelRatio * zoom, () =>
+				toPng(target, {
+					pixelRatio,
+					cacheBust: true,
+					backgroundColor,
+					width: padding > 0 ? captureWidth : undefined,
+					height: padding > 0 ? captureHeight : undefined,
+					canvasWidth: captureWidth * zoom,
+					canvasHeight: captureHeight * zoom,
+					style: padding > 0 ? { padding: `${padding}px`, boxSizing: 'border-box' } : undefined
+				})
+			)
 		);
 
 		const a = document.createElement('a');
