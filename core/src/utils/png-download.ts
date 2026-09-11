@@ -1,6 +1,9 @@
 import { toast } from 'svelte-sonner';
 import { toPng } from 'html-to-image';
 import { getSandboxFrameCapture } from '../user-components/sandbox/png-capture-registry';
+import { findChartInstances } from '../user-components/tags/echarts/chart-instance-registry';
+import { scaleOptionFontSizes } from '../user-components/tags/echarts/scale-option-font-sizes';
+import type { EChartsOption } from 'echarts';
 
 export type PngDownloadOptions = {
 	filename: string;
@@ -33,6 +36,7 @@ export type PngDownloadOptions = {
 async function withSandboxedIframesReplaced<T>(
 	target: HTMLElement,
 	pixelRatio: number,
+	fontScale: number,
 	fn: () => Promise<T>
 ): Promise<T> {
 	const iframes = Array.from(target.querySelectorAll('iframe')).filter(
@@ -47,7 +51,7 @@ async function withSandboxedIframesReplaced<T>(
 			const capture = getSandboxFrameCapture(iframe);
 			if (!capture) return;
 			try {
-				const dataUrl = await capture(pixelRatio);
+				const dataUrl = await capture(pixelRatio, fontScale);
 				const img = document.createElement('img');
 				img.src = dataUrl;
 				// Overlay positioned to match the iframe's bounding box. Insert
@@ -101,46 +105,86 @@ async function withSandboxedIframesReplaced<T>(
 	}
 }
 
-// A report captured at its natural size renders every page at the same
+const EXPORT_FONT_SCALE_VAR = '--png-export-font-scale';
+
+// A report captured at its natural font size renders every page at the same
 // absolute pixel size, so a long report just produces a very tall, narrow
 // image. Whatever the image is eventually viewed in (an image viewer, a
-// slide, a chat preview) will scale that whole image down to fit its frame,
-// and the taller the source image the more aggressively it gets shrunk — so
-// text in long reports ends up looking much smaller than in short ones.
+// slide, a chat preview) scales that whole image down to fit its frame, and
+// the taller the source image the more aggressively it gets shrunk — so text
+// in long reports ends up looking much smaller than in short ones.
 //
-// This can't be fixed by bumping the report's CSS font-size: chart text
-// (axis labels, legends, data labels) is drawn by ECharts as literal pixel
-// values baked into canvas/SVG draw calls, entirely outside the page's
-// font-size/em cascade — no CSS change can ever reach it, and JS-mode charts
-// additionally render inside a sandboxed iframe with its own document. Doing
-// that made prose/headings balloon while chart text stayed frozen, an
-// obvious mismatch.
+// A viewer that fits the whole image into a box constrained by both width
+// and height (the common "fit to screen" case) ends up displaying text at
+// roughly `sourceTextSize * fontScale / aspectRatio`, since the report's
+// width is fixed by its layout and only height grows with aspect ratio. For
+// that displayed size to stay constant regardless of report length,
+// fontScale needs to grow *linearly* with aspect ratio — above the reference
+// ratio (a normal report's proportions, where the unscaled size already
+// looks right), fontScale = aspectRatio / REFERENCE_ASPECT_RATIO.
 //
-// Instead we zoom the whole rendered capture: html-to-image renders the page
-// into an SVG at its natural size, then (via `canvasWidth`/`canvasHeight`)
-// draws that into a larger final canvas — the same mechanism `pixelRatio`
-// already uses for crisp retina exports. HTML text and other vector content
-// re-rasterizes crisply at the larger size; already-rasterized content
-// (chart <canvas> bitmaps) gets stretched, so at moderate zoom that's a light
-// softening rather than a visible mismatch — everything grows together.
+// Crucially this must be a REAL font-size change (not just a bigger output
+// canvas/resolution): resizing a whole raster image uniformly changes
+// nothing about its internal proportions, so any downstream proportional
+// fit-to-frame scaling cancels a pure resolution bump out completely. Only
+// genuinely growing text relative to the report's fixed width survives that.
 //
-// How much to zoom: a viewer that fits the whole image into a box constrained
-// by both width and height (the common "fit to screen" case — an image
-// viewer, a slide, a chat preview) ends up displaying text at roughly
-// `sourceTextSize * zoom / aspectRatio`, since width is fixed by the report's
-// layout and only height grows with aspect ratio. For that displayed size to
-// stay constant regardless of how long the report is, zoom needs to grow
-// *linearly* with aspect ratio, not by a small fraction of it — so above the
-// reference ratio (a normal report's proportions, where the unscaled size
-// already looks right), zoom = aspectRatio / REFERENCE_ASPECT_RATIO.
-const REFERENCE_ASPECT_RATIO = 1.5; // height:width ratio where zooming starts
-const MAX_EXPORT_ZOOM = 6; // generous backstop, not a target — chart bitmaps visibly soften well before this
+// ECharts renders all its text as literal pixel values baked into canvas/SVG
+// draw calls — entirely outside the font-size/em cascade — so the CSS
+// variable alone only reaches prose/headings/tables. Chart text is scaled
+// separately (see scaleOptionFontSizes) using the exact same factor, so nothing
+// grows out of proportion with anything else.
+const REFERENCE_ASPECT_RATIO = 1.5; // height:width ratio where scaling starts
+const MAX_EXPORT_FONT_SCALE = 3; // sanity backstop against pathological layouts, not a target
 
-function computeExportZoom(width: number, height: number): number {
+function computeExportFontScale(width: number, height: number): number {
 	if (width <= 0 || height <= 0) return 1;
 	const aspectRatio = height / width;
 	if (aspectRatio <= REFERENCE_ASPECT_RATIO) return 1;
-	return Math.min(MAX_EXPORT_ZOOM, aspectRatio / REFERENCE_ASPECT_RATIO);
+	return Math.min(MAX_EXPORT_FONT_SCALE, aspectRatio / REFERENCE_ASPECT_RATIO);
+}
+
+/**
+ * Scales up report text (CSS font-size for HTML content, a temporary
+ * setOption patch for every host-rendered chart) for long captures, before
+ * measuring the final capture size so `fn` sees the rect that will actually
+ * be rasterized. Reverts everything afterwards regardless of outcome.
+ * Sandboxed charts are scaled separately, inline with their own capture
+ * request (see withSandboxedIframesReplaced) — this only handles what's
+ * rendered directly in the host document.
+ */
+async function withExportFontScale<T>(
+	target: HTMLElement,
+	fn: (rect: { width: number; height: number }, fontScale: number) => Promise<T>
+): Promise<T> {
+	const naturalRect = target.getBoundingClientRect();
+	const fontScale = computeExportFontScale(naturalRect.width, naturalRect.height);
+
+	if (fontScale === 1) {
+		return fn(naturalRect, fontScale);
+	}
+
+	target.style.setProperty(EXPORT_FONT_SCALE_VAR, String(fontScale));
+
+	const charts = findChartInstances(target);
+	const originalOptions = charts.map((chart) => chart.getOption() as EChartsOption);
+	charts.forEach((chart, i) => {
+		chart.setOption(scaleOptionFontSizes(originalOptions[i], fontScale), {
+			notMerge: true,
+			silent: true
+		});
+	});
+
+	void target.offsetHeight; // force reflow so the rect below reflects the scaled font size
+
+	try {
+		return await fn(target.getBoundingClientRect(), fontScale);
+	} finally {
+		charts.forEach((chart, i) => {
+			chart.setOption(originalOptions[i], { notMerge: true, silent: true });
+		});
+		target.style.removeProperty(EXPORT_FONT_SCALE_VAR);
+	}
 }
 
 function resolveBackgroundColor(target: HTMLElement): string {
@@ -206,28 +250,23 @@ export async function downloadPng(options: PngDownloadOptions): Promise<void> {
 	try {
 		const backgroundColor = resolveBackgroundColor(target);
 
-		const rect = target.getBoundingClientRect();
-		const captureWidth = Math.ceil(rect.width) + padding * 2;
-		const captureHeight = Math.ceil(rect.height) + padding * 2;
-		const zoom = computeExportZoom(rect.width, rect.height);
-
 		const pixelRatio = 2;
-		// Sandboxed (JS-mode) charts render their own capture natively, so ask
-		// for it at the final effective resolution directly — crisp, unlike the
-		// canvasWidth/canvasHeight stretch that the rest of the page goes through.
 		const dataUrl = await withCaptureStyles(target, () =>
-			withSandboxedIframesReplaced(target, pixelRatio * zoom, () =>
-				toPng(target, {
-					pixelRatio,
-					cacheBust: true,
-					backgroundColor,
-					width: padding > 0 ? captureWidth : undefined,
-					height: padding > 0 ? captureHeight : undefined,
-					canvasWidth: captureWidth * zoom,
-					canvasHeight: captureHeight * zoom,
-					style: padding > 0 ? { padding: `${padding}px`, boxSizing: 'border-box' } : undefined
-				})
-			)
+			withExportFontScale(target, (rect, fontScale) => {
+				const captureWidth = Math.ceil(rect.width) + padding * 2;
+				const captureHeight = Math.ceil(rect.height) + padding * 2;
+
+				return withSandboxedIframesReplaced(target, pixelRatio, fontScale, () =>
+					toPng(target, {
+						pixelRatio,
+						cacheBust: true,
+						backgroundColor,
+						width: padding > 0 ? captureWidth : undefined,
+						height: padding > 0 ? captureHeight : undefined,
+						style: padding > 0 ? { padding: `${padding}px`, boxSizing: 'border-box' } : undefined
+					})
+				);
+			})
 		);
 
 		const a = document.createElement('a');

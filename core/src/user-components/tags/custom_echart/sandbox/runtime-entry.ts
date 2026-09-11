@@ -20,6 +20,7 @@
 import * as echarts from 'echarts';
 import type { EChartsOption } from 'echarts';
 import { createTheme } from '../../echarts/echarts-themes';
+import { scaleOptionFontSizes } from '../../echarts/scale-option-font-sizes';
 import { getThemeToken } from '../../../../theme/get-theme-token';
 import { withAutoXAxisLabelLayout } from '../../echarts/echarts-utils';
 import { buildCustomEchartOptions } from '../build-custom-echart-options';
@@ -341,7 +342,7 @@ bootSandbox<InitMessage>({
 		host = h;
 		applyInit(init);
 	},
-	onCapturePng(pixelRatio) {
+	onCapturePng(pixelRatio, fontScale = 1) {
 		// ECharts knows how to render itself to a PNG data URL directly. Use
 		// the chart's actual background (transparent in our theme) so the
 		// parent's html-to-image composite shows whatever's behind the iframe
@@ -350,11 +351,22 @@ bootSandbox<InitMessage>({
 		if (!chart || chart.isDisposed()) {
 			throw new Error('chart not initialized — cannot capture');
 		}
-		return chart.getDataURL({
-			type: 'png',
-			pixelRatio,
-			backgroundColor: 'transparent'
-		});
+
+		if (fontScale === 1) {
+			return chart.getDataURL({ type: 'png', pixelRatio, backgroundColor: 'transparent' });
+		}
+
+		// Temporarily bump every font size in the chart's own current (fully
+		// resolved) option, capture, then restore — scoped to this one export,
+		// never visible in the interactive report.
+		const originalOption = chart.getOption() as EChartsOption;
+		const scaledOption = scaleOptionFontSizes(originalOption, fontScale);
+		chart.setOption(scaledOption, { notMerge: true, silent: true });
+		try {
+			return chart.getDataURL({ type: 'png', pixelRatio, backgroundColor: 'transparent' });
+		} finally {
+			chart.setOption(originalOption, { notMerge: true, silent: true });
+		}
 	},
 	onMessage(message) {
 		const typed = message as ParentToSandboxMessage;

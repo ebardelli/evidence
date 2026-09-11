@@ -302,7 +302,7 @@ describe('bootSandbox handshake', () => {
 		});
 		await waitFor(() => inbox.some((m) => m.type === 'rpc-response'));
 
-		expect(onCapturePng).toHaveBeenCalledWith(3);
+		expect(onCapturePng).toHaveBeenCalledWith(3, undefined);
 		const response = inbox.find((m) => m.type === 'rpc-response');
 		expect(response).toMatchObject({
 			type: 'rpc-response',
@@ -310,6 +310,49 @@ describe('bootSandbox handshake', () => {
 			ok: true,
 			result: FAKE_DATA_URL
 		});
+	});
+
+	it('forwards fontScale from the capture-png payload to onCapturePng', async () => {
+		const onCapturePng = vi.fn(() => 'data:image/png;base64,fakecontent');
+
+		const readyPromise = new Promise<void>((resolve) => {
+			const onReady = (event: MessageEvent) => {
+				const data = event.data as { source?: string; type?: string } | null;
+				if (data?.source === SOURCE && data.type === 'ready') {
+					window.removeEventListener('message', onReady);
+					resolve();
+				}
+			};
+			window.addEventListener('message', onReady);
+		});
+
+		bootSandbox({ source: SOURCE, version: VERSION, onInit: () => {}, onCapturePng });
+		await readyPromise;
+
+		const channel = new MessageChannel();
+		const inbox: ({ type: string } & Record<string, unknown>)[] = [];
+		channel.port1.onmessage = (event) => inbox.push(event.data);
+
+		const initEvent = new MessageEvent('message', {
+			data: { source: SOURCE, v: VERSION, instanceId: 'inst-1', type: 'init' },
+			source: window,
+			ports: [channel.port2]
+		});
+		window.dispatchEvent(initEvent);
+		await flush();
+
+		channel.port1.postMessage({
+			source: SOURCE,
+			v: VERSION,
+			instanceId: 'inst-1',
+			type: 'rpc-request',
+			requestId: 'req-43',
+			kind: 'capture-png',
+			payload: { pixelRatio: 2, fontScale: 2.5 }
+		});
+		await waitFor(() => inbox.some((m) => m.type === 'rpc-response'));
+
+		expect(onCapturePng).toHaveBeenCalledWith(2, 2.5);
 	});
 
 	it('translates an onCapturePng throw into an error rpc-response with the message', async () => {

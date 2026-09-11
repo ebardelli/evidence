@@ -4,6 +4,10 @@ import {
 	registerSandboxFrameCapture,
 	unregisterSandboxFrameCapture
 } from '../user-components/sandbox/png-capture-registry';
+import {
+	registerChartInstance,
+	unregisterChartInstance
+} from '../user-components/tags/echarts/chart-instance-registry';
 
 const { toPngMock } = vi.hoisted(() => ({
 	toPngMock: vi.fn()
@@ -72,7 +76,7 @@ describe('downloadPng', () => {
 		expect(clickSpy).toHaveBeenCalledOnce();
 	});
 
-	it('captures at natural size (no zoom) for normal aspect-ratio reports', async () => {
+	it('leaves font size untouched for normal aspect-ratio captures', async () => {
 		const { downloadPng } = await import('./png-download');
 		const target = document.createElement('div');
 		target.setAttribute('data-markdoc-content', '');
@@ -81,44 +85,61 @@ describe('downloadPng', () => {
 		});
 		document.body.appendChild(target);
 
+		let scaleDuringCapture: string | null = null;
+		toPngMock.mockImplementation((el: HTMLElement) => {
+			scaleDuringCapture = el.style.getPropertyValue('--png-export-font-scale');
+			return Promise.resolve('data:image/png;base64,capture');
+		});
+
 		await downloadPng({ filename: 'report' });
 
+		expect(scaleDuringCapture).toBe('');
+		expect(target.style.getPropertyValue('--png-export-font-scale')).toBe('');
 		expect(toPngMock).toHaveBeenCalledWith(
 			target,
-			expect.objectContaining({
-				width: 820,
-				height: 620,
-				canvasWidth: 820,
-				canvasHeight: 620
-			})
+			expect.objectContaining({ width: 820, height: 620 })
 		);
 	});
 
-	it('zooms the whole capture for tall reports, without changing the node size passed to html-to-image', async () => {
+	it('scales font size for tall captures, remeasures, and reverts', async () => {
 		const { downloadPng } = await import('./png-download');
 		const target = document.createElement('div');
 		target.setAttribute('data-markdoc-content', '');
+
+		const naturalWidth = 800;
+		const naturalHeight = 2400; // aspect ratio 3, above the 1.5 threshold, below the scale cap
+		const scaledHeight = 2900; // simulates the reflow once the font grows
+
 		Object.defineProperty(target, 'getBoundingClientRect', {
-			value: () => ({ width: 800, height: 4000 }) // aspect ratio 5, above the 1.5 threshold
+			value: () => {
+				const scaled = target.style.getPropertyValue('--png-export-font-scale') !== '';
+				return { width: naturalWidth, height: scaled ? scaledHeight : naturalHeight };
+			}
 		});
 		document.body.appendChild(target);
 
+		let scaleDuringCapture: string | null = null;
+		toPngMock.mockImplementation((el: HTMLElement) => {
+			scaleDuringCapture = el.style.getPropertyValue('--png-export-font-scale');
+			return Promise.resolve('data:image/png;base64,capture');
+		});
+
 		await downloadPng({ filename: 'report' });
 
-		// zoom = aspectRatio / REFERENCE_ASPECT_RATIO = 5 / 1.5
-		const expectedZoom = 5 / 1.5;
+		// fontScale = aspectRatio / REFERENCE_ASPECT_RATIO = 3 / 1.5 = 2
+		const expectedScale = 2;
+		expect(Number(scaleDuringCapture)).toBeCloseTo(expectedScale, 5);
+		expect(target.style.getPropertyValue('--png-export-font-scale')).toBe('');
 		expect(toPngMock).toHaveBeenCalledWith(
 			target,
 			expect.objectContaining({
-				width: 820, // unchanged: the node itself is never resized/reflowed
-				height: 4020,
-				canvasWidth: 820 * expectedZoom,
-				canvasHeight: 4020 * expectedZoom
+				width: Math.ceil(naturalWidth) + 20,
+				height: Math.ceil(scaledHeight) + 20
 			})
 		);
 	});
 
-	it('caps zoom for extremely tall reports instead of scaling it without bound', async () => {
+	it('caps font scale for extremely tall reports instead of scaling without bound', async () => {
 		const { downloadPng } = await import('./png-download');
 		const target = document.createElement('div');
 		target.setAttribute('data-markdoc-content', '');
@@ -127,26 +148,64 @@ describe('downloadPng', () => {
 		});
 		document.body.appendChild(target);
 
+		let scaleDuringCapture: string | null = null;
+		toPngMock.mockImplementation((el: HTMLElement) => {
+			scaleDuringCapture = el.style.getPropertyValue('--png-export-font-scale');
+			return Promise.resolve('data:image/png;base64,capture');
+		});
+
 		await downloadPng({ filename: 'report' });
 
-		const maxZoom = 6;
-		expect(toPngMock).toHaveBeenCalledWith(
-			target,
-			expect.objectContaining({
-				width: 820,
-				height: 20020,
-				canvasWidth: 820 * maxZoom,
-				canvasHeight: 20020 * maxZoom
-			})
-		);
+		expect(Number(scaleDuringCapture)).toBe(3); // MAX_EXPORT_FONT_SCALE, not aspectRatio/1.5 (~16.7)
 	});
 
-	it('captures sandboxed iframes at the final effective resolution (pixelRatio * zoom), not the base pixelRatio', async () => {
+	it('scales every host chart instance found in the capture root, then restores the original option', async () => {
 		const { downloadPng } = await import('./png-download');
 		const target = document.createElement('div');
 		target.setAttribute('data-markdoc-content', '');
 		Object.defineProperty(target, 'getBoundingClientRect', {
-			value: () => ({ width: 800, height: 4000 }) // aspect ratio 5 -> zoom 5/1.5
+			value: () => ({ width: 800, height: 2400 }) // aspect ratio 3 -> scale 3/1.5 = 2
+		});
+
+		const chartContainer = document.createElement('div');
+		target.appendChild(chartContainer);
+		document.body.appendChild(target);
+
+		const originalOption = { title: { textStyle: { fontSize: 14 } } };
+		let currentOption = originalOption;
+		let optionDuringCapture: unknown;
+		const fakeChart = {
+			getOption: vi.fn(() => currentOption),
+			setOption: vi.fn((opt: unknown) => {
+				currentOption = opt as typeof originalOption;
+			}),
+			isDisposed: () => false
+		};
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		registerChartInstance(chartContainer, fakeChart as any);
+
+		toPngMock.mockImplementation(() => {
+			optionDuringCapture = currentOption;
+			return Promise.resolve('data:image/png;base64,capture');
+		});
+
+		try {
+			await downloadPng({ filename: 'report' });
+		} finally {
+			unregisterChartInstance(chartContainer);
+		}
+
+		expect(fakeChart.setOption).toHaveBeenCalledTimes(2); // apply, then revert
+		expect(optionDuringCapture).toEqual({ title: { textStyle: { fontSize: 14 * 2 } } });
+		expect(currentOption).toEqual(originalOption); // reverted after capture
+	});
+
+	it('captures sandboxed iframes with the same fontScale used for the rest of the page', async () => {
+		const { downloadPng } = await import('./png-download');
+		const target = document.createElement('div');
+		target.setAttribute('data-markdoc-content', '');
+		Object.defineProperty(target, 'getBoundingClientRect', {
+			value: () => ({ width: 800, height: 2400 }) // aspect ratio 3 -> scale 3/1.5 = 2
 		});
 
 		const wrapper = document.createElement('div');
@@ -163,9 +222,9 @@ describe('downloadPng', () => {
 		target.appendChild(wrapper);
 		document.body.appendChild(target);
 
-		let capturedPixelRatio: number | undefined;
-		const captureFn = vi.fn(async (pixelRatio: number) => {
-			capturedPixelRatio = pixelRatio;
+		let capturedArgs: [number, number | undefined] | undefined;
+		const captureFn = vi.fn(async (pixelRatio: number, fontScale?: number) => {
+			capturedArgs = [pixelRatio, fontScale];
 			return 'data:image/png;base64,chart';
 		});
 		registerSandboxFrameCapture(iframe, captureFn);
@@ -177,7 +236,7 @@ describe('downloadPng', () => {
 		}
 
 		expect(captureFn).toHaveBeenCalledOnce();
-		// base pixelRatio (2) * zoom (5/1.5) = 6.667, not just the base 2
-		expect(capturedPixelRatio).toBeCloseTo(2 * (5 / 1.5), 5);
+		expect(capturedArgs?.[0]).toBe(2); // base pixelRatio, unaffected by font scale
+		expect(capturedArgs?.[1]).toBeCloseTo(2, 5);
 	});
 });

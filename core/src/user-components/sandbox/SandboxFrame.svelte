@@ -246,12 +246,16 @@
 	// 10s is a "the iframe is wedged" ceiling, not an expected duration.
 	const CAPTURE_TIMEOUT_MS = 10_000;
 
-	function requestPng(pixelRatio: number): Promise<string> {
+	function requestPng(pixelRatio: number, fontScale?: number): Promise<string> {
 		if (!rpc || !connected) return Promise.reject(new Error('sandbox not connected'));
 		if (!hasRendered) {
 			return Promise.reject(new Error('sandbox has not rendered yet — cannot capture'));
 		}
-		return rpc.request<string>('capture-png', { pixelRatio }, { timeoutMs: CAPTURE_TIMEOUT_MS });
+		return rpc.request<string>(
+			'capture-png',
+			{ pixelRatio, fontScale },
+			{ timeoutMs: CAPTURE_TIMEOUT_MS }
+		);
 	}
 
 	/**

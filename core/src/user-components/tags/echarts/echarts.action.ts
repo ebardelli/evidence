@@ -3,6 +3,7 @@ import { echartsDarkTheme, echartsLightTheme } from './echarts-themes';
 import type { RendererType } from 'echarts/types/src/util/types.js';
 import type { Action } from 'svelte/action';
 import { withAutoTimeAxisLabelThinning, withAutoXAxisLabelLayout } from './echarts-utils';
+import { registerChartInstance, unregisterChartInstance } from './chart-instance-registry';
 import { logger } from '../../../shims/logger';
 import isEqual from 'lodash/isEqual';
 
@@ -49,6 +50,7 @@ export const echarts: Action<HTMLDivElement, Options> = (node, options) => {
 	registerTheme('dark', options.customDarkTheme || echartsDarkTheme);
 
 	const chart = createChart(node, options);
+	registerChartInstance(node, chart);
 	const initialHasData = hasSeriesData(options.echartsOptions);
 
 	options.onCreate?.(chart);
@@ -342,6 +344,7 @@ export const echarts: Action<HTMLDivElement, Options> = (node, options) => {
 		},
 		destroy: () => {
 			options.onExtraHeightChange?.(0);
+			unregisterChartInstance(node);
 			chart.dispose();
 			resizeObserver.disconnect();
 			node.removeEventListener('contextmenu', handleContextMenu);

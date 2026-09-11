@@ -66,8 +66,12 @@ export interface BootSandboxOptions<Init extends { type: 'init' }> {
 	 * blocking the whole export).
 	 *
 	 * If omitted, capture-png requests are answered with an error response.
+	 *
+	 * `fontScale`, when > 1, asks the consumer to temporarily render its text
+	 * bigger for this one capture (see custom_echart's usage) — consumers that
+	 * don't have a notion of scalable text can ignore it.
 	 */
-	onCapturePng?: (pixelRatio: number) => Promise<string> | string;
+	onCapturePng?: (pixelRatio: number, fontScale?: number) => Promise<string> | string;
 }
 
 /**
@@ -178,8 +182,8 @@ export function bootSandbox<Init extends { type: 'init' }>(opts: BootSandboxOpti
 		// for free by just supplying onCapturePng.
 		if (onCapturePng) {
 			rpc.setHandler('capture-png', (payload) => {
-				const pixelRatio = (payload as { pixelRatio?: number } | undefined)?.pixelRatio ?? 2;
-				return onCapturePng(pixelRatio);
+				const typed = payload as { pixelRatio?: number; fontScale?: number } | undefined;
+				return onCapturePng(typed?.pixelRatio ?? 2, typed?.fontScale);
 			});
 		}
 		host = makeHost();

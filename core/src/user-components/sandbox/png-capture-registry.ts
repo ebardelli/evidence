@@ -15,7 +15,7 @@
  * doesn't leak; iframe GC takes the entry with it.
  */
 
-export type CapturePngFn = (pixelRatio: number) => Promise<string>;
+export type CapturePngFn = (pixelRatio: number, fontScale?: number) => Promise<string>;
 
 const registry = new WeakMap<HTMLIFrameElement, CapturePngFn>();
 
