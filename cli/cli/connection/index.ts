@@ -11,6 +11,7 @@ import { executeFabricQuery } from './fabric';
 import { executeDatabricksQuery } from './databricks';
 import { executePostgresQuery } from './postgres';
 import { executeMotherduckQuery } from './motherduck';
+import { executeDuckDBQuery } from './duckdb';
 import { managedTableNamesSql } from '@evidence/core/metadata/managed-catalog';
 import type { ConnectionConfig, QueryResult } from './types';
 
@@ -36,6 +37,8 @@ export async function executeQuery(sql: string, config: ConnectionConfig): Promi
 			return executePostgresQuery(sql, config);
 		case 'motherduck':
 			return executeMotherduckQuery(sql, config);
+		case 'duckdb':
+			return executeDuckDBQuery(sql, config);
 		default:
 			// Belt-and-braces: a future ConnectionConfig variant added without a
 			// matching branch should fail loudly here rather than silently
@@ -44,6 +47,21 @@ export async function executeQuery(sql: string, config: ConnectionConfig): Promi
 				`Unsupported connection type: ${JSON.stringify((config as { type?: unknown }).type)}`
 			);
 	}
+}
+
+// Shared by `motherduck` (DuckDB over Postgres-wire) and `duckdb` (native) —
+// same engine, same information_schema shape. Unqualify the default 'main'
+// schema; qualify the rest — matches how unqualified names resolve. Exclude
+// the engine's own system catalogs when no `schemas:` allowlist is set.
+function duckdbFamilyListTablesSql(schemas: string[] | undefined): string {
+	const base =
+		"SELECT CASE WHEN table_schema = 'main' THEN table_name ELSE table_schema || '.' || table_name END AS name FROM information_schema.tables";
+	const allowlist = schemas ?? [];
+	if (allowlist.length > 0) {
+		const inList = allowlist.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ');
+		return `${base} WHERE table_schema IN (${inList}) ORDER BY name`;
+	}
+	return `${base} WHERE table_schema NOT IN ('information_schema', 'pg_catalog') ORDER BY name`;
 }
 
 /**
@@ -130,19 +148,10 @@ export function listTablesSql(config: ConnectionConfig | null): string {
 			const inList = schemas.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ');
 			return `${base} WHERE table_schema IN (${inList}) ORDER BY name`;
 		}
-		case 'motherduck': {
-			// DuckDB exposes a standard information_schema. Unqualify the default 'main'
-			// schema; qualify the rest — matches how unqualified names resolve. Exclude
-			// the engine's own system catalogs when no `schemas:` allowlist is set.
-			const base =
-				"SELECT CASE WHEN table_schema = 'main' THEN table_name ELSE table_schema || '.' || table_name END AS name FROM information_schema.tables";
-			const schemas = config.schemas ?? [];
-			if (schemas.length > 0) {
-				const inList = schemas.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ');
-				return `${base} WHERE table_schema IN (${inList}) ORDER BY name`;
-			}
-			return `${base} WHERE table_schema NOT IN ('information_schema', 'pg_catalog') ORDER BY name`;
-		}
+		case 'motherduck':
+			return duckdbFamilyListTablesSql(config.schemas);
+		case 'duckdb':
+			return duckdbFamilyListTablesSql(config.schemas);
 	}
 }
 

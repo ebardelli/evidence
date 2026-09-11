@@ -9,10 +9,9 @@
  * the `dev` case in `index.ts` and `pnpm evd dev`.
  */
 
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureStudioServerOrExit } from './server.shared.ts';
+import { ensureStudioServerOrExit, spawnForegroundChild } from './server.shared.ts';
 
 export interface DevServerOptions {
 	port: number;
@@ -37,34 +36,23 @@ export async function startDevServer(options: DevServerOptions): Promise<void> {
 
 	console.log(`  Starting vite dev (project: ${projectCwd})\n`);
 
-	const child = spawn('pnpm', viteArgs, {
-		cwd: cliRoot,
-		stdio: 'inherit',
-		env: {
-			...process.env,
-			EVIDENCE_PROJECT_CWD: projectCwd
-		}
-	});
-
-	const forwardSignal = (sig: NodeJS.Signals) => () => {
-		if (!child.killed) child.kill(sig);
-	};
-	process.on('SIGINT', forwardSignal('SIGINT'));
-	process.on('SIGTERM', forwardSignal('SIGTERM'));
-
-	await new Promise<void>((resolve) => {
-		child.on('error', (err) => {
-			const code = (err as NodeJS.ErrnoException).code;
-			if (code === 'ENOENT') {
-				console.error('  ✗ pnpm not found — ensure pnpm is installed and in your PATH.');
-			} else {
-				console.error(`  ✗ Failed to start vite dev: ${err.message}`);
+	let code: number;
+	try {
+		code = await spawnForegroundChild('pnpm', viteArgs, {
+			cwd: cliRoot,
+			env: {
+				...process.env,
+				EVIDENCE_PROJECT_CWD: projectCwd
 			}
-			process.exit(1);
 		});
-		child.on('exit', (code) => {
-			process.exit(code ?? 0);
-			resolve();
-		});
-	});
+	} catch (err) {
+		const errCode = (err as NodeJS.ErrnoException).code;
+		if (errCode === 'ENOENT') {
+			console.error('  ✗ pnpm not found — ensure pnpm is installed and in your PATH.');
+		} else {
+			console.error(`  ✗ Failed to start vite dev: ${(err as Error).message}`);
+		}
+		process.exit(1);
+	}
+	process.exit(code);
 }

@@ -2,7 +2,7 @@ import type { Node, Config, RenderableTreeNode } from '@markdoc/markdoc';
 import { partialFileExists, partialCircularReference, and } from '../../validators';
 import type { UserComponentSchema } from '../../types';
 import { ZodAttribute } from '../../common/zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { parseFrontmatter } from '../../../utils/parseFrontmatter';
 import { TRANSLATIONS_KEY } from '../../../constants/variable-keys';
 import { resolvePartialFile } from '../../common/resolve-reference';

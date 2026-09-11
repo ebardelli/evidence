@@ -23,7 +23,7 @@ import { HEIGHT_ATTRIBUTE } from '../../common/height-attribute';
 import { CONNECT_GROUP_ATTRIBUTE } from '../../common/connect-group-attribute';
 import { ZodAttribute } from '../../common/zod-attribute';
 import { TOOLTIP_FIELDS_ATTRIBUTE, validateTooltipFieldFormats } from '../../common/tooltip-fields';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { METRIC_ATTRIBUTE } from '../../common/metric-attribute';
 import { validateDataSources, type DataSource } from '../../common/data-sources';
 

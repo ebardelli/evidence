@@ -1,6 +1,6 @@
 import type { UserComponentAttribute } from '../types';
 import { ZodAttribute } from './zod-attribute';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * Schema for the handle_missing attribute.

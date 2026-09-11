@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { themeOverridesSchema } from '../types/theme';
 import { availableIconNames } from '../user-components/common/icon-names';
 import { workflowSchema } from './workflow-frontmatter';
