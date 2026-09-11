@@ -105,8 +105,8 @@ describe('downloadPng', () => {
 
 		await downloadPng({ filename: 'report' });
 
-		// zoom = 1 + (5 - 1.5) * 0.25 = 1.875
-		const expectedZoom = 1.875;
+		// zoom = aspectRatio / REFERENCE_ASPECT_RATIO = 5 / 1.5
+		const expectedZoom = 5 / 1.5;
 		expect(toPngMock).toHaveBeenCalledWith(
 			target,
 			expect.objectContaining({
@@ -129,7 +129,7 @@ describe('downloadPng', () => {
 
 		await downloadPng({ filename: 'report' });
 
-		const maxZoom = 2.5;
+		const maxZoom = 6;
 		expect(toPngMock).toHaveBeenCalledWith(
 			target,
 			expect.objectContaining({
@@ -146,7 +146,7 @@ describe('downloadPng', () => {
 		const target = document.createElement('div');
 		target.setAttribute('data-markdoc-content', '');
 		Object.defineProperty(target, 'getBoundingClientRect', {
-			value: () => ({ width: 800, height: 4000 }) // aspect ratio 5 -> zoom 1.875
+			value: () => ({ width: 800, height: 4000 }) // aspect ratio 5 -> zoom 5/1.5
 		});
 
 		const wrapper = document.createElement('div');
@@ -177,7 +177,7 @@ describe('downloadPng', () => {
 		}
 
 		expect(captureFn).toHaveBeenCalledOnce();
-		// base pixelRatio (2) * zoom (1.875) = 3.75, not just the base 2
-		expect(capturedPixelRatio).toBeCloseTo(3.75, 5);
+		// base pixelRatio (2) * zoom (5/1.5) = 6.667, not just the base 2
+		expect(capturedPixelRatio).toBeCloseTo(2 * (5 / 1.5), 5);
 	});
 });

@@ -123,16 +123,24 @@ async function withSandboxedIframesReplaced<T>(
 // re-rasterizes crisply at the larger size; already-rasterized content
 // (chart <canvas> bitmaps) gets stretched, so at moderate zoom that's a light
 // softening rather than a visible mismatch — everything grows together.
-const TALL_ASPECT_RATIO_THRESHOLD = 1.5; // height:width ratio where zooming starts
-const EXPORT_ZOOM_PER_EXTRA_RATIO = 0.25;
-const MAX_EXPORT_ZOOM = 2.5; // beyond this, upscaling chart bitmaps gets visibly blurry
+//
+// How much to zoom: a viewer that fits the whole image into a box constrained
+// by both width and height (the common "fit to screen" case — an image
+// viewer, a slide, a chat preview) ends up displaying text at roughly
+// `sourceTextSize * zoom / aspectRatio`, since width is fixed by the report's
+// layout and only height grows with aspect ratio. For that displayed size to
+// stay constant regardless of how long the report is, zoom needs to grow
+// *linearly* with aspect ratio, not by a small fraction of it — so above the
+// reference ratio (a normal report's proportions, where the unscaled size
+// already looks right), zoom = aspectRatio / REFERENCE_ASPECT_RATIO.
+const REFERENCE_ASPECT_RATIO = 1.5; // height:width ratio where zooming starts
+const MAX_EXPORT_ZOOM = 6; // generous backstop, not a target — chart bitmaps visibly soften well before this
 
 function computeExportZoom(width: number, height: number): number {
 	if (width <= 0 || height <= 0) return 1;
 	const aspectRatio = height / width;
-	if (aspectRatio <= TALL_ASPECT_RATIO_THRESHOLD) return 1;
-	const extraRatio = aspectRatio - TALL_ASPECT_RATIO_THRESHOLD;
-	return Math.min(MAX_EXPORT_ZOOM, 1 + extraRatio * EXPORT_ZOOM_PER_EXTRA_RATIO);
+	if (aspectRatio <= REFERENCE_ASPECT_RATIO) return 1;
+	return Math.min(MAX_EXPORT_ZOOM, aspectRatio / REFERENCE_ASPECT_RATIO);
 }
 
 function resolveBackgroundColor(target: HTMLElement): string {
