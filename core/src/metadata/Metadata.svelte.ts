@@ -19,7 +19,7 @@ import {
 	managedModelsSql,
 	NO_QUERY_CACHE
 } from './managed-catalog';
-import type { IMetadata } from './metadata';
+import type { IMetadata, IColumnMetadata } from './metadata';
 import type {
 	QueryService,
 	AnyRowType,
