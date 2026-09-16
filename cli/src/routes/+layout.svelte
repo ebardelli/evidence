@@ -259,7 +259,12 @@
 									{#if data.proxyLogoutUrl}
 										<DropdownMenu.Item class="cursor-pointer">
 											{#snippet child({ props })}
-												<a href={data.proxyLogoutUrl} class="flex w-full items-center gap-2" {...props}>
+												<a
+													href={data.proxyLogoutUrl}
+													data-sveltekit-reload
+													class="flex w-full items-center gap-2"
+													{...props}
+												>
 													<LogOut class="size-4" />
 													Log out
 												</a>
