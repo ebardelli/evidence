@@ -35,6 +35,15 @@
  *
  * JWT mode takes precedence when both are configured, and plain header
  * values are never consulted in that case.
+ *
+ * Either mode can end up with no identity on a given request even though
+ * it's configured — a missing/expired JWT, or a blank header from a proxy
+ * whose own session lapsed. EVIDENCE_AUTH_PROXY_LOGIN_URL (see
+ * getProxyLoginUrl) sends the viewer through the proxy's sign-in flow
+ * instead of quietly falling back to serve mode's "not logged in" sidebar
+ * state; EVIDENCE_AUTH_PROXY_LOGOUT_URL (see getProxyLogoutUrl) points the
+ * sidebar's "Log out" action at the proxy's sign-out endpoint. Both are
+ * unset by default.
  */
 
 import { createRemoteJWKSet, errors as joseErrors, jwtVerify, type JWTPayload } from 'jose';
@@ -174,6 +183,34 @@ export async function getProxyUser(headers: Headers): Promise<ProxyUser | null> 
 	const jwksUrl = process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL;
 	if (jwksUrl) return getJwtVerifiedUser(headers, jwksUrl);
 	return getHeaderTrustedUser(headers);
+}
+
+// True once either trust mode above is set up, so callers can tell "no
+// proxy identity because nothing is configured" (expected, e.g. dev mode or
+// a deployment not using this feature) apart from "no proxy identity despite
+// JWT/header mode being configured" (the proxy's session lapsed, or its
+// forwarded token expired/rotated) — only the latter should ever trigger a
+// login redirect.
+export function proxyAuthConfigured(): boolean {
+	return !!(process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL || process.env.EVIDENCE_AUTH_PROXY_EMAIL_HEADER);
+}
+
+// Where to send a viewer whose proxy identity is missing or failed
+// verification — typically the proxy's own sign-in endpoint (e.g.
+// oauth2-proxy's `/oauth2/start`), which re-runs the IdP flow and hands
+// Evidence a fresh token on the way back. Unset by default: a lapsed
+// identity degrades to the existing "not logged in" sidebar state rather
+// than forcing a redirect.
+export function getProxyLoginUrl(): string | null {
+	return process.env.EVIDENCE_AUTH_PROXY_LOGIN_URL?.trim() || null;
+}
+
+// Where the sidebar's "Log out" action should send a viewer with a proxy
+// identity — typically the proxy's own sign-out endpoint (e.g. oauth2-proxy's
+// `/oauth2/sign_out`), which clears its session so the next request re-runs
+// the IdP flow. Unset by default: no logout action is shown.
+export function getProxyLogoutUrl(): string | null {
+	return process.env.EVIDENCE_AUTH_PROXY_LOGOUT_URL?.trim() || null;
 }
 
 /**

@@ -26,7 +26,8 @@
 		Fullscreen,
 		Minimize,
 		User,
-		TriangleAlert
+		TriangleAlert,
+		LogOut
 	} from 'lucide-svelte';
 	import { createFullscreen } from '@evidence/core/utils/fullscreen.svelte';
 	import { isPageDownloadEnabled } from '@evidence/core/config/page-frontmatter-schema';
@@ -291,6 +292,18 @@
 										<DropdownMenu.Label class="text-muted-foreground text-xs font-normal">
 											To log in, run <code class="bg-muted rounded px-1">evidence login</code>
 										</DropdownMenu.Label>
+										<DropdownMenu.Separator />
+									{/if}
+
+									{#if data.proxyLogoutUrl}
+										<DropdownMenu.Item class="cursor-pointer">
+											{#snippet child({ props })}
+												<a href={data.proxyLogoutUrl} class="flex w-full items-center gap-2" {...props}>
+													<LogOut class="size-4" />
+													Log out
+												</a>
+											{/snippet}
+										</DropdownMenu.Item>
 										<DropdownMenu.Separator />
 									{/if}
 
