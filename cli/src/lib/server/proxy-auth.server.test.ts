@@ -22,7 +22,13 @@ vi.mock('jose', async (importOriginal) => {
 	};
 });
 
-import { getProxyUser, getAccountVariables } from '$lib/server/proxy-auth.server';
+import {
+	getProxyUser,
+	getAccountVariables,
+	proxyAuthConfigured,
+	getProxyLoginUrl,
+	getProxyLogoutUrl
+} from '$lib/server/proxy-auth.server';
 
 const ENV_KEYS = [
 	'EVIDENCE_AUTH_PROXY_EMAIL_HEADER',
@@ -33,6 +39,8 @@ const ENV_KEYS = [
 	'EVIDENCE_AUTH_PROXY_JWT_AUDIENCE',
 	'EVIDENCE_AUTH_PROXY_JWT_EMAIL_CLAIM',
 	'EVIDENCE_AUTH_PROXY_JWT_NAME_CLAIM',
+	'EVIDENCE_AUTH_PROXY_LOGIN_URL',
+	'EVIDENCE_AUTH_PROXY_LOGOUT_URL',
 	'EVIDENCE_AUTH_DISABLED',
 	'EVIDENCE_BASIC_USER',
 	'EVIDENCE_BASIC_PASSWORD'
@@ -477,5 +485,55 @@ describe('getProxyUser (JWT mode)', () => {
 		process.env.EVIDENCE_AUTH_DISABLED = 'true';
 
 		expect(await getProxyUser(new Headers())).toBeNull();
+	});
+});
+
+describe('proxyAuthConfigured', () => {
+	let saved: ReturnType<typeof saveEnv>;
+	beforeEach(() => {
+		saved = saveEnv();
+		for (const k of ENV_KEYS) delete process.env[k];
+	});
+	afterEach(() => restoreEnv(saved));
+
+	it('is false when neither trust mode is configured', () => {
+		expect(proxyAuthConfigured()).toBe(false);
+	});
+
+	it('is true once JWT mode is configured', () => {
+		process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL = 'https://idp.example.com/jwks';
+		expect(proxyAuthConfigured()).toBe(true);
+	});
+
+	it('is true once plain header mode is configured', () => {
+		process.env.EVIDENCE_AUTH_PROXY_EMAIL_HEADER = 'X-Forwarded-Email';
+		expect(proxyAuthConfigured()).toBe(true);
+	});
+});
+
+describe('getProxyLoginUrl / getProxyLogoutUrl', () => {
+	let saved: ReturnType<typeof saveEnv>;
+	beforeEach(() => {
+		saved = saveEnv();
+		for (const k of ENV_KEYS) delete process.env[k];
+	});
+	afterEach(() => restoreEnv(saved));
+
+	it('is null when unset', () => {
+		expect(getProxyLoginUrl()).toBeNull();
+		expect(getProxyLogoutUrl()).toBeNull();
+	});
+
+	it('returns the configured, trimmed URL', () => {
+		process.env.EVIDENCE_AUTH_PROXY_LOGIN_URL = ' /oauth2/start?rd={returnTo} ';
+		process.env.EVIDENCE_AUTH_PROXY_LOGOUT_URL = ' /oauth2/sign_out ';
+
+		expect(getProxyLoginUrl()).toBe('/oauth2/start?rd={returnTo}');
+		expect(getProxyLogoutUrl()).toBe('/oauth2/sign_out');
+	});
+
+	it('treats a blank string as unset', () => {
+		process.env.EVIDENCE_AUTH_PROXY_LOGIN_URL = '   ';
+		expect(getProxyLoginUrl()).toBeNull();
 	});
 });

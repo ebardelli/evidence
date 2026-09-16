@@ -76,6 +76,19 @@ For proxies that only forward a plain header — Authelia/Authentik's `Remote-Em
   Unlike JWT mode, this is not cryptographically verified — it only changes what the sidebar displays and what `{{ $user.* }}` resolves to based on whatever value is in the header. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity, including bypassing the [page allowlist](#restricting-individual-pages-to-an-allowlist) below. Prefer JWT verification above when your proxy supports it.
 </Warning>
 
+## Redirecting to sign-in when the proxy identity lapses
+
+Either mode above can end up with no identity on a given request even though it's configured — a JWT that's missing, expired, or otherwise fails verification, or a blank header because the proxy's own session lapsed. By default this degrades quietly to serve mode's "not logged in" sidebar state; a page gated by an `auth:` allowlist (below) instead gets a 403.
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_AUTH_PROXY_LOGIN_URL` | Optional: when set, a request with no proxy identity is redirected here instead — typically the proxy's own sign-in endpoint (e.g. oauth2-proxy's `/oauth2/start`), which re-runs the identity provider flow and hands Evidence a fresh token on the way back. Include the literal placeholder `{returnTo}` anywhere in the URL to have it replaced with the page the viewer was headed to, e.g. `/oauth2/start?rd={returnTo}`. |
+| `EVIDENCE_AUTH_PROXY_LOGOUT_URL` | Optional: when set, and a proxy identity is present, the sidebar shows a "Log out" action pointing here — typically the proxy's sign-out endpoint (e.g. oauth2-proxy's `/oauth2/sign_out`). |
+
+<Note>
+  Both are unset by default, and only take effect once a trust mode above (JWT or plain header) is configured — an unconfigured deployment (e.g. `evidence dev`, or serve mode without either) never has a proxy identity to begin with, so it never redirects.
+</Note>
+
 ## Using the proxy identity in markdown and SQL
 
 <Warning>
