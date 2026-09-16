@@ -4,12 +4,18 @@
 
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 import { getNavItems } from '$lib/markdown/files.server';
 import { loadCredentials } from '$lib/auth/credentials.server';
 import { getProjectCwd } from '$lib/server/project-cwd';
 import { isServeMode } from '$lib/server/serve-mode';
-import { getProxyUser } from '$lib/server/proxy-auth.server';
+import {
+	getProxyUser,
+	getProxyLoginUrl,
+	getProxyLogoutUrl,
+	proxyAuthConfigured
+} from '$lib/server/proxy-auth.server';
 import { loadConnectionConfig } from '$cli/connection';
 import { loadProjectConfig } from '$cli/project-config/load-config';
 import { resolveProjectTheme } from '$lib/server/theme.server';
@@ -69,6 +75,23 @@ export const load: LayoutServerLoad = async ({ url, cookies, request }) => {
 	// Cosmetic sidebar identity forwarded by a fronting authenticating proxy;
 	// see proxy-auth.server.ts for the trust model.
 	const proxyUser = isServe ? await getProxyUser(request.headers) : null;
+
+	// Proxy auth is configured but this request came in with no usable
+	// identity — a missing/expired JWT, or a blank header because the
+	// proxy's own session lapsed. Bounce through EVIDENCE_AUTH_PROXY_LOGIN_URL
+	// (typically the proxy's sign-in endpoint) rather than quietly falling
+	// back to the "not logged in" sidebar state below. `{returnTo}` in the
+	// configured URL is replaced with the page the viewer was headed to, so
+	// the proxy can send them back after signing in. No-op unless both proxy
+	// auth and the login URL are configured, so this is opt-in.
+	if (isServe && !proxyUser && proxyAuthConfigured()) {
+		const loginUrl = getProxyLoginUrl();
+		if (loginUrl) {
+			const returnTo = `${url.pathname}${url.search}`;
+			redirect(302, loginUrl.replaceAll('{returnTo}', encodeURIComponent(returnTo)));
+		}
+	}
+
 	const connectionConfig = await loadConnectionConfig(cwd).catch(() => null);
 	const connectionType: WarehouseType | null = connectionConfig?.type ?? null;
 	const hasLocalConnection = existsSync(path.join(cwd, 'connection.yaml'));
@@ -106,6 +129,10 @@ export const load: LayoutServerLoad = async ({ url, cookies, request }) => {
 		currentLanguage,
 		sidebarWidthPx,
 		user: credentials?.user ?? proxyUser,
+		// Only set for a proxy-forwarded identity, not a Studio-login user —
+		// signing out of the proxy's session (e.g. oauth2-proxy's
+		// `/oauth2/sign_out`) has nothing to do with `evidence login`/`logout`.
+		proxyLogoutUrl: proxyUser ? getProxyLogoutUrl() : null,
 		organizationId,
 		organizationName,
 		organizations,
