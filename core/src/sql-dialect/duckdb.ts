@@ -6,6 +6,7 @@ import {
 	isSimpleIdentifier,
 	wrapWithLimit,
 	escapeAnsiStringLiteral,
+	defaultStringLiteralEscapesBackslash,
 	type DialectFunctionTypeRule,
 	type SqlDialect,
 	NO_CONDITIONAL_AGGREGATES
@@ -115,6 +116,17 @@ export class DuckDBDialect implements SqlDialect {
 	}
 
 	readonly escapesBackslashInIdentifiers = false;
+	readonly escapesBackslashInStringLiterals = false;
+	readonly dollarQuoting: 'none' | 'double' | 'tagged' = 'none';
+	readonly tripleQuotedStringDelimiters: readonly string[] = [];
+
+	stringLiteralEscapesBackslash(prefix: string): boolean {
+		// DuckDB `E'…'` escape strings honour backslash escapes even though
+		// ordinary literals do not.
+		return defaultStringLiteralEscapesBackslash(prefix, this.escapesBackslashInStringLiterals, {
+			escapeStrings: true
+		});
+	}
 
 	quoteIdentifierIfNeeded(identifier: string): string {
 		return isSimpleIdentifier(identifier) ? identifier : this.quoteAlias(identifier);
