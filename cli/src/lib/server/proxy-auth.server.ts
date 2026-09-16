@@ -121,6 +121,21 @@ function claimString(payload: JWTPayload, claim: string): string | null {
 	return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+// EVIDENCE_AUTH_PROXY_JWT_ISSUER/_AUDIENCE accept a comma-separated list of
+// acceptable values, not just one — some identity providers legitimately
+// issue tokens with more than one valid value for the same claim. Google is
+// the standing example: its own verification libraries accept both
+// "accounts.google.com" and "https://accounts.google.com" as `iss` (see
+// google-auth-library's default `issuers`), and which form a given token
+// actually carries isn't something a deployment controls.
+function parseMultiValueClaim(envValue: string | undefined): string[] | undefined {
+	const values = (envValue ?? '')
+		.split(',')
+		.map((v) => v.trim())
+		.filter(Boolean);
+	return values.length ? values : undefined;
+}
+
 async function getJwtVerifiedUser(headers: Headers, jwksUrl: string): Promise<ProxyUser | null> {
 	const headerName = process.env.EVIDENCE_AUTH_PROXY_JWT_HEADER || 'Authorization';
 	assertJwtConfigValid(headerName, jwksUrl);
@@ -135,8 +150,8 @@ async function getJwtVerifiedUser(headers: Headers, jwksUrl: string): Promise<Pr
 	try {
 		({ payload } = await jwtVerify(token, getJwks(jwksUrl), {
 			algorithms: ALLOWED_JWT_ALGORITHMS,
-			issuer: process.env.EVIDENCE_AUTH_PROXY_JWT_ISSUER || undefined,
-			audience: process.env.EVIDENCE_AUTH_PROXY_JWT_AUDIENCE || undefined
+			issuer: parseMultiValueClaim(process.env.EVIDENCE_AUTH_PROXY_JWT_ISSUER),
+			audience: parseMultiValueClaim(process.env.EVIDENCE_AUTH_PROXY_JWT_AUDIENCE)
 		}));
 	} catch (err) {
 		// A present-but-invalid token (bad signature, expired, wrong
@@ -146,7 +161,18 @@ async function getJwtVerifiedUser(headers: Headers, jwksUrl: string): Promise<Pr
 		// out) so they're logged at debug level; anything else is more
 		// likely a real misconfiguration or attack and is worth surfacing.
 		const isExpired = err instanceof joseErrors.JWTExpired;
-		const message = err instanceof Error ? err.message : 'verification failed';
+		let message = err instanceof Error ? err.message : 'verification failed';
+		// jose validates the signature before checking claims, so on a claim
+		// mismatch `err.payload` is already-verified — safe to log the actual
+		// value alongside what was configured, which is most of the work of
+		// diagnosing a misconfigured issuer/audience.
+		if (err instanceof joseErrors.JWTClaimValidationFailed && (err.claim === 'iss' || err.claim === 'aud')) {
+			const expected =
+				err.claim === 'iss'
+					? process.env.EVIDENCE_AUTH_PROXY_JWT_ISSUER
+					: process.env.EVIDENCE_AUTH_PROXY_JWT_AUDIENCE;
+			message += ` (token's "${err.claim}" is ${JSON.stringify(err.payload[err.claim])}, configured value is ${JSON.stringify(expected)})`;
+		}
 		if (isExpired) {
 			console.debug(`Rejected reverse-proxy JWT: ${message}`);
 		} else {
