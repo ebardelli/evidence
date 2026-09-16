@@ -27,6 +27,15 @@ const PUBLIC_STUDIO_HOST = process.env.PUBLIC_STUDIO_HOST ?? 'https://evidence.s
 
 const STUDIO_HOST = PUBLIC_STUDIO_HOST.replace(/\/$/, '');
 
+// Guards the EVIDENCE_AUTH_PROXY_LOGIN_URL redirect below against a tight
+// browser↔proxy loop: if the proxy's own session is already valid but the
+// identity it forwards to Evidence keeps failing verification (a persistent
+// issuer/audience misconfiguration, not a lapsed session), redirecting again
+// just bounces straight back with the same bad identity. One redirect is
+// allowed per cookie lifetime; a second failure within it falls through to
+// the ordinary degraded/403 behavior instead of redirecting forever.
+const AUTH_REDIRECT_LOOP_COOKIE = 'evidence_auth_redirect_attempted';
+
 // Org info is fetched once at startup and cached for the session
 let orgCache: {
 	organizationId: string | null;
@@ -86,7 +95,8 @@ export const load: LayoutServerLoad = async ({ url, cookies, request }) => {
 	// auth and the login URL are configured, so this is opt-in.
 	if (isServe && !proxyUser && proxyAuthConfigured()) {
 		const loginUrl = getProxyLoginUrl();
-		if (loginUrl) {
+		if (loginUrl && !cookies.get(AUTH_REDIRECT_LOOP_COOKIE)) {
+			cookies.set(AUTH_REDIRECT_LOOP_COOKIE, '1', { path: '/', maxAge: 10 });
 			const returnTo = `${url.pathname}${url.search}`;
 			redirect(302, loginUrl.replaceAll('{returnTo}', encodeURIComponent(returnTo)));
 		}
