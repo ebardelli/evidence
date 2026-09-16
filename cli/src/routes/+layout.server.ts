@@ -68,7 +68,7 @@ export const load: LayoutServerLoad = async ({ url, cookies, request }) => {
 	const credentials = isServe ? null : await loadCredentials();
 	// Cosmetic sidebar identity forwarded by a fronting authenticating proxy;
 	// see proxy-auth.server.ts for the trust model.
-	const proxyUser = isServe ? getProxyUser(request.headers) : null;
+	const proxyUser = isServe ? await getProxyUser(request.headers) : null;
 	const connectionConfig = await loadConnectionConfig(cwd).catch(() => null);
 	const connectionType: WarehouseType | null = connectionConfig?.type ?? null;
 	const hasLocalConnection = existsSync(path.join(cwd, 'connection.yaml'));

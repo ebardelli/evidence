@@ -99,7 +99,7 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 	const isServe = isServeMode();
 	// `{{ $user.* }}` in markdown/SQL — serve mode only; dev mode has no
 	// reverse-proxy identity to source it from (see proxy-auth.server.ts).
-	const account = isServe ? getAccountVariables(request.headers) : undefined;
+	const account = isServe ? await getAccountVariables(request.headers) : undefined;
 
 	// `.catch` so a malformed evidence.config.yaml degrades to no project layout
 	// defaults rather than 500-ing the page (mirrors Studio's graceful read).

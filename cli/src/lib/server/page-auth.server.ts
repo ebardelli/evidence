@@ -62,7 +62,7 @@ export async function assertPageAuthorized(
 ): Promise<void> {
 	if (!auth?.users?.length && !auth?.query) return;
 
-	const proxyUser = getProxyUser(headers);
+	const proxyUser = await getProxyUser(headers);
 	if (!proxyUser) {
 		error(403, 'This page requires an authenticated viewer identity.');
 	}

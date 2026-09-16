@@ -50,7 +50,7 @@ export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent, r
 	]);
 	// `{{ $user.* }}` in markdown/SQL — serve mode only; dev mode has no
 	// reverse-proxy identity to source it from (see proxy-auth.server.ts).
-	const account = isServe ? getAccountVariables(request.headers) : undefined;
+	const account = isServe ? await getAccountVariables(request.headers) : undefined;
 
 	// Get home markdown file from CWD
 	const cwd = getProjectCwd();
