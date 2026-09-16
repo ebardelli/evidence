@@ -44,14 +44,18 @@ Most identity-aware proxies forward the signed-in user's identity as a signed JW
 | --- | --- |
 | `EVIDENCE_AUTH_PROXY_JWT_JWKS_URL` | JWKS endpoint used to verify the token's signature. Setting this enables JWT mode. Must be `https://` (or `localhost`/`127.0.0.1` for local testing) — Evidence refuses to start verifying tokens against a plaintext endpoint. |
 | `EVIDENCE_AUTH_PROXY_JWT_HEADER` | Optional: name of the inbound header holding the token (default `Authorization`, read as `Bearer <token>`/`bearer <token>` or a bare token) |
-| `EVIDENCE_AUTH_PROXY_JWT_ISSUER` | The token's expected `iss` claim. At least one of this and `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` is required — see below. |
-| `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` | The token's expected `aud` claim. At least one of this and `EVIDENCE_AUTH_PROXY_JWT_ISSUER` is required — see below. |
+| `EVIDENCE_AUTH_PROXY_JWT_ISSUER` | The token's expected `iss` claim. Accepts a comma-separated list of acceptable values — see below. At least one of this and `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` is required. |
+| `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` | The token's expected `aud` claim. Also accepts a comma-separated list. At least one of this and `EVIDENCE_AUTH_PROXY_JWT_ISSUER` is required. |
 | `EVIDENCE_AUTH_PROXY_JWT_EMAIL_CLAIM` | Optional: claim to read the viewer's email from (default `email`) |
 | `EVIDENCE_AUTH_PROXY_JWT_NAME_CLAIM` | Optional: claim to read a display name from (default `name`) |
 
 <Warning>
   At least one of `EVIDENCE_AUTH_PROXY_JWT_ISSUER` or `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` must be set — Evidence refuses every request in JWT mode until one is configured. Without either, any validly-signed token from the JWKS endpoint is accepted, including one minted for a completely different application that happens to share your identity provider (a real risk for shared endpoints like Google's or a multi-app Entra ID tenant). Setting both is best; `aud` is generally the stronger check since it's scoped to this specific application.
 </Warning>
+
+<Note>
+  **Google specifically** issues ID tokens with `iss` set to either `accounts.google.com` or `https://accounts.google.com` — Google's own [google-auth-library](https://github.com/googleapis/google-auth-library-nodejs) accepts both, and which form a given token carries isn't something a deployment controls. Set `EVIDENCE_AUTH_PROXY_JWT_ISSUER=accounts.google.com,https://accounts.google.com` (both, comma-separated) rather than either alone — otherwise every sign-in fails verification with `unexpected "iss" claim value`, not just ones with an expired token.
+</Note>
 
 <Note>
   A token that's present but fails verification — bad signature, disallowed algorithm, expired, wrong issuer or audience — is treated as no identity at all. Evidence never falls back to trusting a plain header in this mode, even if `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` is also set.

@@ -224,6 +224,46 @@ describe('getProxyUser (JWT mode)', () => {
 		});
 	});
 
+	it('accepts a token whose issuer matches any value in a comma-separated EVIDENCE_AUTH_PROXY_JWT_ISSUER list', async () => {
+		const url = jwksUrl();
+		const { privateKey, jwk } = await issueKeyPair();
+		stubJwks(jwk);
+		process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL = url;
+		// Mirrors Google's own dual issuer: google-auth-library accepts both
+		// "accounts.google.com" and "https://accounts.google.com" as `iss`.
+		process.env.EVIDENCE_AUTH_PROXY_JWT_ISSUER = 'accounts.google.com, https://accounts.google.com';
+		process.env.EVIDENCE_AUTH_PROXY_JWT_AUDIENCE = 'evidence';
+
+		const token = await sign(
+			privateKey,
+			jwk.kid as string,
+			{ email: 'jane@example.com' },
+			{ issuer: 'https://accounts.google.com', audience: 'evidence' }
+		);
+
+		const headers = new Headers({ Authorization: `Bearer ${token}` });
+		expect((await getProxyUser(headers))?.email).toBe('jane@example.com');
+	});
+
+	it('rejects a token whose issuer matches none of a comma-separated EVIDENCE_AUTH_PROXY_JWT_ISSUER list', async () => {
+		const url = jwksUrl();
+		const { privateKey, jwk } = await issueKeyPair();
+		stubJwks(jwk);
+		process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL = url;
+		process.env.EVIDENCE_AUTH_PROXY_JWT_ISSUER = 'accounts.google.com, https://accounts.google.com';
+		process.env.EVIDENCE_AUTH_PROXY_JWT_AUDIENCE = 'evidence';
+
+		const token = await sign(
+			privateKey,
+			jwk.kid as string,
+			{ email: 'jane@example.com' },
+			{ issuer: 'https://some-other-idp.example.com', audience: 'evidence' }
+		);
+
+		const headers = new Headers({ Authorization: `Bearer ${token}` });
+		expect(await getProxyUser(headers)).toBeNull();
+	});
+
 	it('never trusts the plain email header once JWT mode is configured, even without a token', async () => {
 		const url = jwksUrl();
 		const { jwk } = await issueKeyPair();
