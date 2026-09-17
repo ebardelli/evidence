@@ -15,6 +15,7 @@ import { resolveProjectTheme } from '$lib/server/theme.server';
 import { selectLanguage } from '@evidence/core/translations/resolve-translations';
 import { SIDEBAR_WIDTH_COOKIE_NAME } from '@evidence/core/shadcn/components/ui/sidebar/constants.js';
 import { getTranslationLanguages } from '$lib/server/translations.server';
+import { MIME_BY_EXTENSION } from '$lib/mime-by-extension';
 import type { WarehouseType } from '@evidence/core/sql-dialect';
 const PUBLIC_STUDIO_HOST = process.env.PUBLIC_STUDIO_HOST ?? 'https://evidence.studio';
 
@@ -69,7 +70,19 @@ export const load: LayoutServerLoad = async ({ url, cookies }) => {
 	const connectionType: WarehouseType | null = connectionConfig?.type ?? null;
 	const hasLocalConnection = existsSync(path.join(cwd, 'connection.yaml'));
 	const projectConfig = await loadProjectConfig(cwd).catch(() => null);
-	const projectName = projectConfig?.project.name ?? null;
+	// Explicit `title:` in evidence.config.yaml overrides the sidebar header
+	// (which otherwise shows the Studio org name, or "Evidence").
+	const siteTitle = projectConfig?.title ?? null;
+	// Explicit `favicon:` (a project-root-relative path) overrides the default
+	// Evidence favicon, served through a dedicated route (see
+	// routes/__evidence/favicon) so it can't collide with the CLI's own
+	// bundled favicon.svg.
+	const favicon = projectConfig?.favicon
+		? {
+				href: '/__evidence/favicon',
+				type: MIME_BY_EXTENSION[path.extname(projectConfig.favicon).toLowerCase()] ?? 'image/x-icon'
+			}
+		: null;
 	// Read theme.yaml directly so a broken evidence.config.yaml doesn't drop a valid theme.
 	const resolvedTheme = await resolveProjectTheme(cwd);
 
@@ -96,7 +109,8 @@ export const load: LayoutServerLoad = async ({ url, cookies }) => {
 
 	return {
 		navItems,
-		projectName,
+		siteTitle,
+		favicon,
 		resolvedTheme,
 		languages,
 		currentLanguage,

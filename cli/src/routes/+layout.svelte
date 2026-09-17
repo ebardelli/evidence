@@ -27,6 +27,7 @@
 	import { Toaster, toast } from 'svelte-sonner';
 	import { page } from '$app/state';
 	import { invalidateAll } from '$app/navigation';
+	import { assets } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { generateThemeCSS } from '@evidence/core/theme/theme-css-helper';
 	import { setThemeContext } from '@evidence/core/theme/theme.context.svelte';
@@ -43,6 +44,10 @@
 	const themeContext = setThemeContext(data.resolvedTheme);
 	$effect(() => themeContext.updateConfig(data.resolvedTheme));
 	const themeCSS = $derived(generateThemeCSS(data.resolvedTheme));
+
+	// `favicon:` in evidence.config.yaml overrides the default Evidence favicon.
+	const faviconHref = $derived(data.favicon?.href ?? `${assets}/favicon.svg`);
+	const faviconType = $derived(data.favicon?.type ?? 'image/svg+xml');
 
 	const isLoginPage = $derived(page.url.pathname === '/login');
 
@@ -125,6 +130,7 @@
 </script>
 
 <svelte:head>
+	<link rel="icon" href={faviconHref} type={faviconType} />
 	<!-- Project theme (theme.yaml) → CSS variables, scoped to :root like Studio -->
 	{@html `<style>${themeCSS}</style>`}
 </svelte:head>
@@ -164,7 +170,7 @@
 			>
 				<Sidebar.Header class="h-12 justify-center">
 					<a href="/" class="flex h-8 items-center gap-2 px-4 font-semibold tracking-tight">
-						<p class="text-base font-medium">{orgDisplayName ?? 'Evidence'}</p>
+						<p class="text-base font-medium">{orgDisplayName ?? data.siteTitle ?? 'Evidence'}</p>
 					</a>
 				</Sidebar.Header>
 				<Sidebar.Content
@@ -177,19 +183,6 @@
 									<p class="text-muted-foreground px-3 text-sm">No pages found</p>
 								{:else}
 									<Sidebar.Group>
-										{#if data.projectName}
-											<Sidebar.MenuItem>
-												<Sidebar.MenuButton class="text-muted-foreground font-medium capitalize">
-													{#snippet child()}
-														<span
-															class="text-primary flex h-7 w-full items-center gap-2 overflow-hidden rounded-md px-2 py-1 text-left text-sm font-medium capitalize"
-														>
-															{data.projectName}
-														</span>
-													{/snippet}
-												</Sidebar.MenuButton>
-											</Sidebar.MenuItem>
-										{/if}
 										<PageNavTree tree={navTree} currentPath={page.url.pathname} />
 									</Sidebar.Group>
 								{/if}

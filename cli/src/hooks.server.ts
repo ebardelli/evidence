@@ -4,27 +4,7 @@ import path from 'node:path';
 import { isServeMode, basicAuthConfigured } from '$lib/server/serve-mode';
 import { checkBasicAuth, SERVE_HARDENED_HEADERS } from '$cli/basic-auth';
 import { getProjectCwd } from '$lib/server/project-cwd';
-
-const STATIC_CONTENT_TYPES: Record<string, string> = {
-	'.png': 'image/png',
-	'.jpg': 'image/jpeg',
-	'.jpeg': 'image/jpeg',
-	'.gif': 'image/gif',
-	'.svg': 'image/svg+xml',
-	'.webp': 'image/webp',
-	'.avif': 'image/avif',
-	'.ico': 'image/x-icon',
-	'.pdf': 'application/pdf',
-	'.mp4': 'video/mp4',
-	'.webm': 'video/webm',
-	'.mp3': 'audio/mpeg',
-	'.wav': 'audio/wav',
-	'.woff': 'font/woff',
-	'.woff2': 'font/woff2',
-	'.csv': 'text/csv',
-	'.json': 'application/json',
-	'.txt': 'text/plain'
-};
+import { MIME_BY_EXTENSION as STATIC_CONTENT_TYPES } from '$lib/mime-by-extension';
 
 /**
  * Serve the project's static/ directory (the legacy Evidence convention for images and
