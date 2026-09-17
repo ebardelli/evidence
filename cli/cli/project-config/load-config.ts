@@ -46,6 +46,16 @@ export interface ProjectConfig {
 	/** Absolute filesystem path to the pages directory. */
 	pagesDir: string;
 	/**
+	 * Site title shown in the sidebar header, overriding the Studio org name /
+	 * the literal "Evidence" fallback. Undefined when absent.
+	 */
+	title?: string;
+	/**
+	 * Path (relative to the project root) to a custom favicon, overriding the
+	 * default Evidence favicon. Undefined when absent.
+	 */
+	favicon?: string;
+	/**
 	 * Project-level page layout defaults from the `layout:` block, applied to
 	 * every page unless overridden in page frontmatter. Undefined when absent or
 	 * malformed (degrades to no defaults, mirroring Studio).
@@ -160,6 +170,22 @@ function parseProjectConfig(
 		pages = obj.pages;
 	}
 
+	let title: string | undefined;
+	if (obj.title !== undefined) {
+		if (typeof obj.title !== 'string' || obj.title.trim() === '') {
+			throw new ProjectConfigError(`${configPath}: \`title\` must be a non-empty string`);
+		}
+		title = obj.title;
+	}
+
+	let favicon: string | undefined;
+	if (obj.favicon !== undefined) {
+		if (typeof obj.favicon !== 'string' || obj.favicon.trim() === '') {
+			throw new ProjectConfigError(`${configPath}: \`favicon\` must be a non-empty string path`);
+		}
+		favicon = obj.favicon;
+	}
+
 	// Lenient like Studio: a malformed `layout:` / `date:` block degrades to no
 	// project defaults rather than failing the whole config (a wrong type for one
 	// key shouldn't blank every page's settings).
@@ -174,6 +200,8 @@ function parseProjectConfig(
 		},
 		pages,
 		pagesDir: path.resolve(projectRoot, pages),
+		title,
+		favicon,
 		layout: layout?.success ? layout.data : undefined,
 		date: date?.success ? date.data : undefined,
 		theme: undefined,
