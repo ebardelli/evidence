@@ -24,6 +24,9 @@ project:
 
 pages: ./pages
 
+title: 'My Company'
+favicon: ./static/favicon.svg
+
 date:
   first_day_of_week: monday
   default_date_range_end:
@@ -46,6 +49,8 @@ directories:
 | `project.name` | string | The project's display name. |
 | `project.evidence` | string | The Evidence platform version. Populated for you; you don't normally edit it. |
 | `pages` | string | The directory that holds your pages, partials, and queries. Defaults to `./pages`. |
+| `title` | string | Overrides the sidebar header text (otherwise your Evidence Studio organization name, or "Evidence"). |
+| `favicon` | string | Overrides the default favicon. A path to an image file, relative to the project root, e.g. `./static/favicon.svg`. |
 | `date.first_day_of_week` | `sunday` \| `monday` | The day weeks start on for week grains and calendars. Defaults to `sunday`. |
 | `date.default_date_range_end` | object | The default "end" of relative date ranges. See the accepted values below. |
 | `layout.page_width` | `article` \| `full` | Default page width — `article` (centered, limited width) or `full` (full browser width). |

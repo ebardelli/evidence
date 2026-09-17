@@ -126,6 +126,41 @@ describe('loadProjectConfig', () => {
 			expect(cfg.date).toBeUndefined();
 		});
 
+		it('leaves title and favicon undefined when absent', async () => {
+			const cfg = await loadProjectConfig(projectRoot);
+			expect(cfg.title).toBeUndefined();
+			expect(cfg.favicon).toBeUndefined();
+		});
+
+		it('parses `title` and `favicon`', async () => {
+			await writeFile(
+				path.join(projectRoot, 'evidence.config.yaml'),
+				`project:\n  name: My Project\n  evidence: "0.4.3"\ntitle: My Company\nfavicon: /favicon.svg\n`,
+				'utf-8'
+			);
+			const cfg = await loadProjectConfig(projectRoot);
+			expect(cfg.title).toBe('My Company');
+			expect(cfg.favicon).toBe('/favicon.svg');
+		});
+
+		it('throws when `title` is not a non-empty string', async () => {
+			await writeFile(
+				path.join(projectRoot, 'evidence.config.yaml'),
+				`project:\n  name: x\n  evidence: "0.4.3"\ntitle: ""\n`,
+				'utf-8'
+			);
+			await expect(loadProjectConfig(projectRoot)).rejects.toThrow(/title/);
+		});
+
+		it('throws when `favicon` is not a non-empty string', async () => {
+			await writeFile(
+				path.join(projectRoot, 'evidence.config.yaml'),
+				`project:\n  name: x\n  evidence: "0.4.3"\nfavicon: ""\n`,
+				'utf-8'
+			);
+			await expect(loadProjectConfig(projectRoot)).rejects.toThrow(/favicon/);
+		});
+
 		it('honours a custom `pages` path', async () => {
 			await writeFile(
 				path.join(projectRoot, 'evidence.config.yaml'),
