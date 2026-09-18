@@ -34,7 +34,7 @@
 </script>
 
 <svelte:head>
-	<title>Evidence - {data.markdown.title ?? data.markdown.fileName}</title>
+	<title>{data.siteTitle ?? 'Evidence'} - {data.markdown.title ?? data.markdown.fileName}</title>
 	<meta name="description" content="Evidence Studio local development" />
 	<!-- Emitted after the layout's :root theme, so a page frontmatter theme wins by cascade -->
 	{@html `<style>${themeCSS}</style>`}
