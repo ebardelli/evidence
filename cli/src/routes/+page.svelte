@@ -17,7 +17,7 @@
 </script>
 
 <svelte:head>
-	<title>Evidence{data.markdown?.title ?? data.markdown?.fileName ? ` - ${data.markdown.title ?? data.markdown.fileName}` : ''}</title>
+	<title>{data.siteTitle ?? 'Evidence'}{data.markdown?.title ?? data.markdown?.fileName ? ` - ${data.markdown.title ?? data.markdown.fileName}` : ''}</title>
 	<meta name="description" content="Evidence Studio local development" />
 </svelte:head>
 
