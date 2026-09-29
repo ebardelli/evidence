@@ -28,6 +28,7 @@ import { parseDateStringAsLocalMidnight } from './utils/date-utils';
 import { processDateRange } from './user-components/common/date-options';
 import { watch } from 'runed';
 import { logger } from './shims/logger';
+import { hasPendingFilter } from './interpolate-query-strings';
 
 // NOTE: When adding fields to this object, use `| undefined` rather than `?` to make a property optional. This
 // makes it so that dependencies must be explicitly ommitted rather than forgotten, resulting in more intentful usage.
@@ -234,6 +235,7 @@ export class Query<RowType extends AnyRowType = AnyRowType> {
 
 				// Only execute if there's actually a max date query to run
 				if (!maxDateQuery) return undefined;
+				if (hasPendingFilter(maxDateQuery)) return lastData;
 
 				// Only refetch if query changed
 				if (maxDateQuery === lastMaxDateQuery && lastData !== undefined) {
@@ -263,6 +265,7 @@ export class Query<RowType extends AnyRowType = AnyRowType> {
 				if (this._destroyed) return lastData;
 
 				if (!countQuery) return undefined;
+				if (hasPendingFilter(countQuery)) return lastData;
 
 				// Skip count query if limit not exceeded (we have all the data)
 				if (!rowLimitExceeded) {
@@ -348,6 +351,10 @@ export class Query<RowType extends AnyRowType = AnyRowType> {
 				{ signal, data: lastData }
 			) => {
 				if (this._destroyed) return lastData;
+
+				// A referenced filter is still resolving its default — running now would
+				// send an empty value. `loading` stays true; the resolved SQL re-triggers.
+				if (hasPendingFilter(dataQuery)) return lastData;
 
 				// If we need a max date but don't have it yet, wait
 				if (this.maxDateQuery && maxDate === undefined) {
@@ -695,6 +702,9 @@ export class Query<RowType extends AnyRowType = AnyRowType> {
 		// return data, so settle loading to false and let `error` surface instead.
 		if (this.sqlGenError) return false;
 
+		// Waiting on a filter's data-driven default: no fetch runs until it resolves.
+		if (this.sqlGenPending) return true;
+
 		const dataHasExecuted =
 			typeof this.dataResource.error !== 'undefined' ||
 			typeof this.dataResource.current !== 'undefined';
@@ -902,6 +912,10 @@ export class Query<RowType extends AnyRowType = AnyRowType> {
 	// shows the message instead of spinning forever waiting for a fetch that will
 	// never run.
 	private readonly sqlGenError: string | null = $derived(this.sqlGen.error);
+
+	// True while the SQL references a filter still resolving its default (see
+	// PENDING_FILTER_MARKER). Holds `loading` and skips execution until it clears.
+	private readonly sqlGenPending: boolean = $derived(hasPendingFilter(this.sqlGen.sql));
 
 	// When using pivots, we check the row limit using a more efficient method: `buildPivotResultSizeLowerBoundQuery`
 	// Memoized via $derived for the same reason as `dataQuery` above.
