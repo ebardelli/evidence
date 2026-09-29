@@ -231,6 +231,17 @@
 		}
 	});
 
+	// While the options query that feeds `select_first` is in flight, mark the filter
+	// pending so queries referencing it wait (spinner) instead of running with an empty
+	// value. `.pre` so the flag is up before sibling charts' queries first resolve their SQL.
+	const awaitsDataDefault = $derived(loading && selectFirst);
+	$effect.pre(() => {
+		if (!filter) return;
+		const target = filter;
+		target.setPending(awaitsDataDefault);
+		return () => target.setPending(false);
+	});
+
 	// Auto-select first option when selectFirst is true and no value is set
 	$effect(() => {
 		if (selectFirst && filter && options.length > 0 && !filter.value) {

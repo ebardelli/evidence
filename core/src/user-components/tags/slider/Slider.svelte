@@ -173,6 +173,16 @@
 		id ? (pageFilters?.get(id) as Filter<SliderValue> | undefined) : undefined
 	);
 
+	// The default below waits for the range query, so mark the filter pending while it's
+	// in flight: queries referencing it wait (spinner) instead of running with an empty
+	// value. `.pre` so the flag is up before sibling charts' queries first resolve their SQL.
+	$effect.pre(() => {
+		if (!filter) return;
+		const target = filter;
+		target.setPending(Boolean(loading));
+		return () => target.setPending(false);
+	});
+
 	// Ensure filter always has a value (default to min for single, [min, max] for range)
 	// Only set default if no value exists and we're not loading
 	$effect(() => {
