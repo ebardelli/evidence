@@ -453,6 +453,20 @@
 		}
 	});
 
+	// While the options query that feeds a data-driven default is in flight, mark the
+	// filter pending so queries referencing it wait (spinner) instead of running with an
+	// empty value. `filter.pending` also reads false once any value is set. `.pre` so the
+	// flag is up before sibling charts' queries first resolve their SQL.
+	const awaitsDataDefault = $derived(
+		loading && (selectFirst || (multiple && defaultTopN != null && defaultTopN > 0))
+	);
+	$effect.pre(() => {
+		if (!filter) return;
+		const target = filter;
+		target.setPending(awaitsDataDefault);
+		return () => target.setPending(false);
+	});
+
 	const unselect = (option: string) => {
 		if (!filter || !Array.isArray(filter.value)) return;
 		filter.value = filter.value.filter((opt) => opt !== option);
