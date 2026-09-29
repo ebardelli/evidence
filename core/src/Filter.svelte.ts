@@ -121,6 +121,21 @@ export abstract class Filter<Value = any> {
 		}
 	}
 
+	/**
+	 * True while the owning component is still resolving a data-driven default
+	 * (e.g. a dropdown's `select_first` waiting on its options query) and no value
+	 * is set yet. Queries referencing a pending filter hold in their loading state
+	 * instead of running with an empty value.
+	 */
+	get pending(): boolean {
+		const value = this.#value;
+		return this.#pending && (value === undefined || value === null || value === '');
+	}
+
+	setPending(pending: boolean) {
+		this.#pending = pending;
+	}
+
 	/** Current value in its serialized (URL-param) string form. */
 	get serializedValue(): string | undefined {
 		return this.opts.serialize(this.value);
@@ -160,6 +175,7 @@ export abstract class Filter<Value = any> {
 	abstract get templateValues(): Record<string, unknown>;
 
 	#value: Value | undefined = $state(undefined);
+	#pending = $state(false);
 	#lastSerialized: string | undefined;
 	#isInitializing = true;
 
