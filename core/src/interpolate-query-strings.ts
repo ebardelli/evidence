@@ -205,6 +205,22 @@ export function hasTemplating(query: string): boolean {
 }
 
 /**
+ * Appended (in `sql` context) to SQL that referenced a filter whose data-driven
+ * default (e.g. a dropdown's `select_first`) is still resolving. Interpolating
+ * that filter now emits an empty value and usually invalid SQL (`and x = `), so
+ * Query holds its loading state while the marker is present instead of running.
+ * It's a SQL comment, so a path that bypasses Query sends the same SQL it would
+ * have without it. Carried in the string itself so it survives every way a
+ * component builds its query (inline-query refs, raw `FROM (...)` wrappers,
+ * `where=` attributes).
+ */
+export const PENDING_FILTER_MARKER = '/*__evidence_pending_filter__*/';
+
+export function hasPendingFilter(sql: string | undefined): boolean {
+	return sql?.includes(PENDING_FILTER_MARKER) ?? false;
+}
+
+/**
  * Interpolate template variables and conditional blocks in query strings
  */
 export function interpolateQueryStrings(
@@ -222,8 +238,10 @@ export function interpolateQueryStrings(
 	visitedQueries: ReadonlySet<string> = new Set<string>(),
 	// Target dialect for finalising translation `.sql` sentinels; omitted → ANSI fallback.
 	dialect?: Pick<SqlDialect, 'escapeStringLiteral'>
-): { sql: string; errors: string[] } {
+): { sql: string; errors: string[]; pendingFilters: string[] } {
 	const errors: string[] = [];
+	// Referenced filters that have no value yet but are still resolving a default.
+	const pending: string[] = [];
 	let sql = stripZeroWidthChars(query);
 
 	// Hide comment bodies before interpolating so `{{...}}` / `[[...]]` written
@@ -247,6 +265,7 @@ export function interpolateQueryStrings(
 		filtersArray,
 		inlineQueries,
 		errors,
+		pending,
 		context,
 		visitedQueries,
 		dialect
@@ -258,6 +277,7 @@ export function interpolateQueryStrings(
 		filtersArray,
 		inlineQueries,
 		errors,
+		pending,
 		context,
 		visitedQueries,
 		dialect
@@ -271,7 +291,13 @@ export function interpolateQueryStrings(
 	// Deduplicate errors
 	const uniqueErrors = Array.from(new Set(errors));
 
-	return { sql, errors: uniqueErrors };
+	const pendingFilters = Array.from(new Set(pending));
+	// Leading newline so the marker isn't swallowed by a trailing `--` comment.
+	if (pendingFilters.length > 0 && context === 'sql' && !hasPendingFilter(sql)) {
+		sql += `\n${PENDING_FILTER_MARKER}`;
+	}
+
+	return { sql, errors: uniqueErrors, pendingFilters };
 }
 
 /**
@@ -305,6 +331,7 @@ function processConditionalBlocks(
 	filtersArray: Filters[],
 	inlineQueries: InlineQueries,
 	errors: string[],
+	pending: string[],
 	context: VariableContext,
 	visitedQueries: ReadonlySet<string>,
 	dialect?: Pick<SqlDialect, 'escapeStringLiteral'>
@@ -328,6 +355,7 @@ function processConditionalBlocks(
 				filtersArray,
 				inlineQueries,
 				errors,
+				pending,
 				context,
 				visitedQueries,
 				dialect
@@ -352,6 +380,7 @@ function shouldIncludeConditionalBlock(
 	filtersArray: Filters[],
 	inlineQueries: InlineQueries,
 	errors: string[],
+	pending: string[],
 	context: VariableContext,
 	visitedQueries: ReadonlySet<string>,
 	dialect?: Pick<SqlDialect, 'escapeStringLiteral'>
@@ -367,6 +396,7 @@ function shouldIncludeConditionalBlock(
 			filtersArray,
 			inlineQueries,
 			errors,
+			pending,
 			context,
 			visitedQueries,
 			dialect
@@ -389,6 +419,7 @@ function processTemplateVariables(
 	filtersArray: Filters[],
 	inlineQueries: InlineQueries,
 	errors: string[],
+	pending: string[],
 	context: VariableContext,
 	visitedQueries: ReadonlySet<string>,
 	dialect?: Pick<SqlDialect, 'escapeStringLiteral'>
@@ -401,6 +432,7 @@ function processTemplateVariables(
 			filtersArray,
 			inlineQueries,
 			errors,
+			pending,
 			context,
 			visitedQueries,
 			dialect
@@ -417,6 +449,7 @@ function evaluateTemplate(
 	filtersArray: Filters[],
 	inlineQueries: InlineQueries,
 	errors: string[],
+	pending: string[],
 	context: VariableContext,
 	visitedQueries: ReadonlySet<string>,
 	dialect?: Pick<SqlDialect, 'escapeStringLiteral'>
@@ -482,6 +515,7 @@ function evaluateTemplate(
 			);
 			// Add any errors from the nested query
 			errors.push(...processedQuery.errors);
+			pending.push(...processedQuery.pendingFilters);
 			// Return the processed query wrapped in parentheses
 			return { value: `(${processedQuery.sql})`, hasValue: true };
 		}
@@ -571,6 +605,7 @@ function evaluateTemplate(
 			}
 
 			if (propertyValue === undefined || propertyValue === '' || propertyValue === null) {
+				if (filter.pending) pending.push(filter.id);
 				// Property exists but has no value - use fallback without error
 				if (fallbackPart !== undefined) {
 					return { value: String(fallbackPart || ''), hasValue: true };
@@ -630,6 +665,7 @@ function evaluateTemplate(
 	}
 
 	if (propertyValue === undefined || propertyValue === '' || propertyValue === null) {
+		if (filter.pending) pending.push(filter.id);
 		// Property exists but has no value - use fallback without error
 		if (fallbackPart !== undefined) {
 			return { value: String(fallbackPart || ''), hasValue: true };
