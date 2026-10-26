@@ -17,6 +17,38 @@ export const pageDownloadsSchema = z.union([
 
 export type PageDownloads = z.infer<typeof pageDownloadsSchema>;
 
+/** Matches a custom page width: a bare number (pixels) or a number with a CSS length unit. */
+const CUSTOM_PAGE_WIDTH = /^\d+(\.\d+)?(px|rem|em|ch|vw|%)?$/;
+
+/**
+ * Page content width: the `article` / `full` presets, or a custom max width —
+ * a number of pixels (`1200`) or a CSS length (`80rem`, `1400px`, `90%`, `90vw`).
+ */
+export const pageWidthSchema = z.union([
+	z.enum(['article', 'full']),
+	z.number().positive(),
+	z
+		.string()
+		.trim()
+		.toLowerCase()
+		.regex(CUSTOM_PAGE_WIDTH, 'Expected article, full, or a CSS length like 80rem')
+]);
+
+export type PageWidth = z.infer<typeof pageWidthSchema>;
+
+const ARTICLE_MAX_WIDTH = '64rem';
+
+/**
+ * CSS `max-width` for a page's content column, or `undefined` to span the
+ * viewport. Unset falls back to the `article` column.
+ */
+export function pageWidthMaxWidth(width: PageWidth | null | undefined): string | undefined {
+	if (width === 'full') return undefined;
+	if (width === undefined || width === null || width === 'article') return ARTICLE_MAX_WIDTH;
+	if (typeof width === 'number') return `${width}px`;
+	return /\d$/.test(width) ? `${width}px` : width;
+}
+
 export function isPageDownloadEnabled(
 	downloads: PageDownloads | null | undefined,
 	kind: PageDownloadKind
@@ -101,12 +133,11 @@ export const projectRootPageFrontmatterSchema = z.object({
 		.describe(
 			'Attribute schema for a custom component (`type: component`). Each key declares an attribute the tag accepts; values are either a shorthand type string (`string` | `number` | `boolean` | `column` | `query` | `format`) or a longhand object with `{ type, required?, default?, description? }`.'
 		),
-	page_width: z
-		.enum(['article', 'full'])
+	page_width: pageWidthSchema
 		.optional()
 		.catch(undefined)
 		.describe(
-			"Page content width. 'article' is a centered narrow column; 'full' spans the viewport."
+			"Page content width. 'article' is a centered narrow column; 'full' spans the viewport; or a custom max width as pixels (1200) or a CSS length (80rem, 90%)."
 		),
 	cards: z.coerce
 		.boolean()
@@ -175,11 +206,10 @@ export type ParsedProjectRootFrontmatter = z.infer<typeof projectRootPageFrontma
  */
 export const projectLayoutSchema = z
 	.object({
-		page_width: z
-			.enum(['article', 'full'])
+		page_width: pageWidthSchema
 			.optional()
 			.describe(
-				"Page content width. 'article' is a centered narrow column; 'full' spans the viewport."
+				"Page content width. 'article' is a centered narrow column; 'full' spans the viewport; or a custom max width as pixels (1200) or a CSS length (80rem, 90%)."
 			),
 		cards: z.boolean().optional().describe('Wrap top-level page content in cards.'),
 		table_of_contents: z.boolean().optional().describe('Show the on-page table of contents.'),

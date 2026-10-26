@@ -185,6 +185,19 @@ describe('parsePageSettings', () => {
 		});
 	});
 
+	it('accepts a custom page_width in pixels or as a CSS length', () => {
+		expect(parsePageSettings('---\npage_width: 1200\n---\n# Page\n')).toEqual({
+			page_width: 1200
+		});
+		expect(parsePageSettings('---\npage_width: 80rem\n---\n# Page\n')).toEqual({
+			page_width: '80rem'
+		});
+	});
+
+	it('drops an invalid page_width so it inherits the default', () => {
+		expect(parsePageSettings('---\npage_width: wide\n---\n# Page\n')).toEqual({});
+	});
+
 	it('omits absent keys so they inherit defaults', () => {
 		expect(parsePageSettings('---\ntitle: Orders\n---\n# Page\n')).toEqual({});
 	});
