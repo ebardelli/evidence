@@ -216,14 +216,41 @@ function sqlString(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
+// Where httpfs looks for a CA bundle (its own error lists these), with
+// SSL_CERT_FILE taking precedence like OpenSSL. First one that exists wins.
+const CA_BUNDLE_CANDIDATES = [
+	'/etc/ssl/certs/ca-certificates.crt',
+	'/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+	'/etc/pki/tls/certs/ca-bundle.crt',
+	'/etc/ssl/ca-bundle.pem',
+	'/etc/ssl/cert.pem'
+];
+
+function findCaBundle(): string | undefined {
+	const fromEnv = process.env.SSL_CERT_FILE;
+	return [fromEnv, ...CA_BUNDLE_CANDIDATES].find((p): p is string => !!p && existsSync(p));
+}
+
 // Order matters: lock_configuration must come last, since after it no SET /
 // RESET / PRAGMA (from setup or a viewer) can change any of the others. With
 // enable_external_access off, DuckDB still permits paths under
 // allowed_directories and refuses everything else — read_*, glob, COPY, ATTACH.
+//
+// Two things DuckDB reads lazily, on first use, would otherwise trip over the
+// lock on the first remote query:
+// - the secret manager loads persistent secrets from ~/.duckdb/stored_secrets
+//   the first time any secret is looked up — `FROM duckdb_secrets()` forces
+//   that load while access is still open;
+// - httpfs reads the system CA bundle for its first HTTPS request — only that
+//   one public file is allowed (DuckDB `allowed_paths` is exact files), never
+//   the rest of its directory.
 function lockStatements(config: DuckDBCredentials): string[] {
 	const allowed = (config.allowedPaths ?? []).map(sqlString).join(', ');
+	const caBundle = findCaBundle();
 	return [
+		'FROM duckdb_secrets()',
 		`SET allowed_directories = [${allowed}]`,
+		`SET allowed_paths = [${caBundle ? sqlString(caBundle) : ''}]`,
 		'SET autoinstall_known_extensions = false',
 		'SET autoload_known_extensions = false',
 		'SET allow_community_extensions = false',
