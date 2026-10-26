@@ -1,0 +1,72 @@
+---
+title: 'DuckDB'
+description: 'Query a local or remote DuckDB database from the Evidence CLI with an embedded, in-process DuckDB engine.'
+---
+
+The DuckDB direct connector runs an embedded [DuckDB](https://duckdb.org) instance inside the Evidence CLI process. Point it at a `.duckdb` file, or use an in-memory database and `ATTACH` remote databases and files in `setup_sql`.
+
+This connector is CLI-only and configured in `connection.yaml`.
+
+## Configuration
+
+```yaml
+type: duckdb
+path: ./warehouse.duckdb # or :memory: (the default)
+setup_sql: |
+  INSTALL httpfs;
+  LOAD httpfs;
+  CREATE SECRET (TYPE gcs, KEY_ID '${GCS_KEY_ID}', SECRET '${GCS_SECRET}');
+  ATTACH 'gs://my-bucket/warehouse.duckdb' AS warehouse (READ_ONLY);
+allowed_paths: ["gs://my-bucket/"]
+```
+
+<ResponseField name="path" type="string">
+  Path to a local `.duckdb` file, resolved relative to `connection.yaml`. Default: `":memory:"`.
+</ResponseField>
+<ResponseField name="setup_sql" type="string">
+  SQL run once when the instance starts: `INSTALL`/`LOAD` extensions, `CREATE SECRET`, `ATTACH` databases. `${VAR}` references are filled from the environment.
+</ResponseField>
+<ResponseField name="setup_sql_path" type="string">
+  Path to a file holding the setup SQL, resolved relative to `connection.yaml`. Use instead of `setup_sql`, not alongside it.
+</ResponseField>
+<ResponseField name="schemas" type="string[]">
+  Allowlist of schemas exposed to the schema browser. Default: `[]`.
+</ResponseField>
+<ResponseField name="allowed_paths" type="string[]">
+  Directory prefixes, local or remote (`gs://bucket/`, `s3://bucket/`), that queries may read once the instance is locked. Local entries resolve relative to `connection.yaml`. Default: `[]`.
+</ResponseField>
+<ResponseField name="lock" type="boolean">
+  Lock the instance after `setup_sql` runs. Default: on in `evidence serve`, off in `evidence dev`.
+</ResponseField>
+<ResponseField name="query_timeout_seconds" type="number">
+  Interrupt a query on a locked instance after this many seconds (HTTP 504). Default: `120`.
+</ResponseField>
+<ResponseField name="max_result_rows" type="number">
+  Reject a result with more rows than this on a locked instance (HTTP 413), rather than truncating it. Default: `100000`.
+</ResponseField>
+<ResponseField name="memory_limit" type="string">
+  DuckDB `memory_limit`, e.g. `'4GB'`. Applied before `setup_sql`.
+</ResponseField>
+<ResponseField name="threads" type="number">
+  DuckDB worker thread count. Applied before `setup_sql`.
+</ResponseField>
+
+## Locking in serve mode
+
+In `evidence serve`, report viewers reach DuckDB through the server's query endpoint, and DuckDB SQL can read and write files, load extensions and change settings. After `setup_sql` finishes, the connector locks the instance:
+
+- Files and URLs outside `allowed_paths` are refused (`read_*`, `glob`, `COPY`, `ATTACH`). Databases already attached during setup keep working.
+- Extensions can no longer be installed or loaded, including auto-loading.
+- Settings are frozen (`lock_configuration`), so no `SET`, `RESET` or `PRAGMA` can undo the lock.
+- Secret values stay redacted.
+- Each request must be a single `SELECT`. Anything else gets HTTP 400 `Only single SELECT statements are allowed`.
+
+If any lock step fails, the instance is closed and every query errors. It never falls back to an unlocked instance.
+
+A project that reads local files at query time must list their directories in `allowed_paths`. `lock: false` turns the lock off and logs a warning at startup. `evidence dev` is unlocked by default, so local development needs no extra configuration.
+
+## Secrets
+
+Use `CREATE SECRET`, which keeps the secret in memory for the life of the process. `CREATE PERSISTENT SECRET` writes the secret in plaintext to `~/.duckdb/stored_secrets/` on the server's disk, where it outlives the process and can be read by anything with access to that directory.
+
+Keep secret values in environment variables and reference them as `${VAR}` in `setup_sql`. If setup fails, those values are redacted from the error message.
