@@ -12,6 +12,14 @@ export type DuckDBCredentials = {
 	schemas?: string[];
 	/** SQL run once when the client starts — INSTALL/LOAD extensions, ATTACH, etc. */
 	setupSql?: string;
+	/** Paths readable once locked (→ DuckDB `allowed_directories`). */
+	allowedPaths?: string[];
+	/** Lock the instance after setup; undefined = on in serve mode, off in dev. */
+	lock?: boolean;
+	queryTimeoutSeconds?: number;
+	maxResultRows?: number;
+	memoryLimit?: string;
+	threads?: number;
 };
 
 // Assert the load-bearing keys so a corrupted secret fails readably, not deep in
@@ -27,6 +35,12 @@ export function normalizeCredentials(raw: unknown): DuckDBCredentials {
 	return {
 		path: c.path,
 		schemas: Array.isArray(c.schemas) ? (c.schemas as string[]) : [],
-		setupSql: typeof c.setupSql === 'string' ? c.setupSql : undefined
+		setupSql: typeof c.setupSql === 'string' ? c.setupSql : undefined,
+		allowedPaths: Array.isArray(c.allowedPaths) ? (c.allowedPaths as string[]) : [],
+		lock: typeof c.lock === 'boolean' ? c.lock : undefined,
+		queryTimeoutSeconds: typeof c.queryTimeoutSeconds === 'number' ? c.queryTimeoutSeconds : undefined,
+		maxResultRows: typeof c.maxResultRows === 'number' ? c.maxResultRows : undefined,
+		memoryLimit: typeof c.memoryLimit === 'string' ? c.memoryLimit : undefined,
+		threads: typeof c.threads === 'number' ? c.threads : undefined
 	};
 }

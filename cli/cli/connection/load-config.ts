@@ -47,6 +47,21 @@ const CONFIG_FILENAME = 'connection.yaml';
 // name position is left untouched.
 const ENV_PATTERN = /\$\{([A-Z][A-Z0-9_]*)\}/g;
 
+// Every value substituted for a `${VAR}`, so an error that echoes back config
+// text (e.g. a DuckDB parser error quoting setup_sql) can be scrubbed before
+// it reaches a log or an HTTP response — see redactInterpolatedValues.
+const interpolatedValues = new Set<string>();
+
+/** Replaces any `${VAR}`-interpolated connection.yaml value in `message` with `[redacted]`. */
+export function redactInterpolatedValues(message: string): string {
+	let redacted = message;
+	// Longest first, so a value that contains another is replaced whole.
+	for (const value of [...interpolatedValues].sort((a, b) => b.length - a.length)) {
+		redacted = redacted.replaceAll(value, '[redacted]');
+	}
+	return redacted;
+}
+
 function interpolateValue(value: unknown): unknown {
 	if (typeof value === 'string') {
 		return value.replace(ENV_PATTERN, (match, name: string) => {
@@ -56,6 +71,8 @@ function interpolateValue(value: unknown): unknown {
 					`${CONFIG_FILENAME}: ${match} references unset environment variable ${name}`
 				);
 			}
+			// Skip trivially short values — redacting e.g. "1" would mangle messages.
+			if (envValue.length >= 4) interpolatedValues.add(envValue);
 			return envValue;
 		});
 	}

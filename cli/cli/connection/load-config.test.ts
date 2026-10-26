@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadConnectionConfig } from './load-config.ts';
+import { loadConnectionConfig, redactInterpolatedValues } from './load-config.ts';
 
 let workDir: string;
 
@@ -281,7 +281,35 @@ describe('loadConnectionConfig', () => {
 		it('defaults to an in-memory database with no setup script', async () => {
 			await writeYaml(`type: duckdb\n`);
 			const cfg = await loadConnectionConfig(workDir);
-			expect(cfg).toEqual({ type: 'duckdb', path: ':memory:', schemas: [], setupSql: undefined });
+			expect(cfg).toEqual({
+				type: 'duckdb',
+				path: ':memory:',
+				schemas: [],
+				setupSql: undefined,
+				allowedPaths: [],
+				lock: undefined,
+				queryTimeoutSeconds: 120,
+				maxResultRows: 100000,
+				memoryLimit: undefined,
+				threads: undefined
+			});
+		});
+
+		it('resolves local allowed_paths relative to cwd and keeps remote prefixes', async () => {
+			await writeYaml(
+				`type: duckdb\nallowed_paths: ["./data", "/abs/dir", "gs://bucket/"]\nlock: true\n`
+			);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toMatchObject({
+				type: 'duckdb',
+				allowedPaths: [path.join(workDir, 'data'), '/abs/dir', 'gs://bucket/'],
+				lock: true
+			});
+		});
+
+		it('rejects a non-positive max_result_rows', async () => {
+			await writeYaml(`type: duckdb\nmax_result_rows: 0\n`);
+			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/max_result_rows/);
 		});
 
 		it('parses an inline setup_sql', async () => {
@@ -319,6 +347,19 @@ describe('loadConnectionConfig', () => {
 				expect(cfg).toMatchObject({ type: 'clickhouse', password: 'hunter2' });
 			} finally {
 				delete process.env.SERVE_TEST_CH_PASSWORD;
+			}
+		});
+
+		it('redacts interpolated values from error messages', async () => {
+			process.env.SERVE_TEST_DUCKDB_SECRET = 'gcs-hmac-s3cr3t';
+			try {
+				await writeYaml(
+					`type: duckdb\nsetup_sql: "CREATE SECRET (TYPE gcs, SECRET '\${SERVE_TEST_DUCKDB_SECRET}')"\n`
+				);
+				await loadConnectionConfig(workDir);
+				expect(redactInterpolatedValues("near 'gcs-hmac-s3cr3t')")).toBe("near '[redacted]')");
+			} finally {
+				delete process.env.SERVE_TEST_DUCKDB_SECRET;
 			}
 		});
 
