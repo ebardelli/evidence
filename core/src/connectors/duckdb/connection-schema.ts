@@ -136,7 +136,7 @@ export const duckdbBase = z.object({
 		.meta(
 			meta({
 				label: 'Threads',
-				description: 'DuckDB worker thread count. Set before setup_sql runs.',
+				description: 'DuckDB worker thread count. Set before setup_sql runs. Defaults to 4.',
 				category: 'context',
 				cliOnly: true
 			})

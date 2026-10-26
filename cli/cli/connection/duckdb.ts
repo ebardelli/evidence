@@ -28,8 +28,7 @@ import yaml from 'js-yaml';
 // chance to extract the addon and put it on NODE_PATH — see loadDuckDBApi.
 import type {
 	DuckDBInstance as DuckDBInstanceType,
-	DuckDBConnection as DuckDBNativeConnection,
-	DuckDBPreparedStatement as DuckDBPreparedStatementType
+	DuckDBConnection as DuckDBNativeConnection
 } from '@duckdb/node-api';
 import { normalizeDateRows } from '@evidence/core/connectors/postgres/normalize-date-rows';
 import { normalizeNumericRows } from '@evidence/core/connectors/postgres/normalize-numeric-rows';
@@ -204,6 +203,7 @@ export class QueryRejectedError extends Error {
 
 const DEFAULT_QUERY_TIMEOUT_SECONDS = 120;
 const DEFAULT_MAX_RESULT_ROWS = 100_000;
+const DEFAULT_THREADS = 4;
 
 // Unset `lock` follows the run mode: on for `evidence serve` (viewers reach
 // this through /api/query), off for `evidence dev` (the author is the viewer).
@@ -312,9 +312,12 @@ async function createInstance(config: DuckDBCredentials): Promise<DuckDBInstance
 
 	const setupConnection = await instance.connect();
 	try {
-		// Sizing first, so setup_sql's ATTACHes and loads already run within it.
+		// Sizing and caching first, so setup_sql's ATTACHes and loads already run
+		// with them (setup_sql may still override). The external file cache keeps
+		// remote file blocks (gs://, s3://) in memory across queries.
 		if (config.memoryLimit) await setupConnection.run(`SET memory_limit = ${sqlString(config.memoryLimit)}`);
-		if (config.threads) await setupConnection.run(`SET threads = ${Math.floor(config.threads)}`);
+		await setupConnection.run(`SET threads = ${Math.floor(config.threads ?? DEFAULT_THREADS)}`);
+		await setupConnection.run('SET enable_external_file_cache = true');
 		if (config.setupSql) {
 			try {
 				await setupConnection.run(config.setupSql);
@@ -380,31 +383,17 @@ async function isNonSelectStatement(
  * Locked instances accept exactly one SELECT. Defence in depth: the lock
  * settings are what actually stop file access (a SELECT can still call table
  * functions), this just refuses DDL/DML/ATTACH/SET/… before they reach it.
+ *
+ * Classified with the parser alone (extractStatements + json_serialize_sql),
+ * never by preparing the statement: running a query as a prepared statement
+ * measured ~1.5s slower per query on the remote warehouse than a plain run().
+ * A syntax error isn't a policy refusal — it falls through and run() reports it.
  */
-async function prepareSingleSelect(
-	connection: DuckDBNativeConnection,
-	sql: string
-): Promise<DuckDBPreparedStatementType> {
-	const { StatementType } = await loadDuckDBApi();
+async function assertSingleSelect(connection: DuckDBNativeConnection, sql: string): Promise<void> {
 	const rejected = new QueryRejectedError('Only single SELECT statements are allowed', 400);
 	const extracted = await connection.extractStatements(sql);
 	if (extracted.count !== 1) throw rejected;
-	let prepared: DuckDBPreparedStatementType;
-	try {
-		prepared = await extracted.prepare(0);
-	} catch (e) {
-		// Binding can fail before the type check runs — e.g. COPY TO / CREATE
-		// SECRET hit the lock's permission error at prepare time. Classify the
-		// statement with the parser alone: a non-SELECT is a policy refusal,
-		// anything else (syntax/bind errors in the author's SELECT) propagates.
-		if (await isNonSelectStatement(connection, sql)) throw rejected;
-		throw e;
-	}
-	if (prepared.statementType !== StatementType.SELECT) {
-		prepared.destroySync();
-		throw rejected;
-	}
-	return prepared;
+	if (await isNonSelectStatement(connection, sql)) throw rejected;
 }
 
 export async function executeDuckDBQuery(
@@ -428,29 +417,20 @@ export async function executeDuckDBQuery(
 			)
 		: undefined;
 	try {
-		let names: string[];
-		let typeNames: string[];
-		let rawRows: Record<string, unknown>[];
-		if (locked) {
-			const prepared = await prepareSingleSelect(connection, sql);
-			// Read one past the cap so an oversized result is detected without
-			// materializing all of it.
-			const reader = await prepared.runAndReadUntil(maxRows + 1);
-			if (reader.currentRowCount > maxRows) {
-				throw new QueryRejectedError(
-					`Query returned more than ${maxRows} rows (max_result_rows)`,
-					413
-				);
-			}
-			names = reader.columnNames();
-			typeNames = reader.columnTypes().map((t) => t?.toString() ?? 'unknown');
-			rawRows = reader.getRowObjectsJS();
-		} else {
-			const result = await connection.run(sql);
-			names = result.columnNames();
-			typeNames = result.columnTypes().map((t) => t?.toString() ?? 'unknown');
-			rawRows = await result.getRowObjectsJS();
+		if (locked) await assertSingleSelect(connection, sql);
+		const result = await connection.run(sql);
+		// The row cap is checked on the materialized result rather than with a
+		// streaming reader: streaming (like prepared execution) was measurably
+		// slower, and memory is bounded by memory_limit either way.
+		if (locked && result.rowCount > maxRows) {
+			throw new QueryRejectedError(
+				`Query returned more than ${maxRows} rows (max_result_rows)`,
+				413
+			);
 		}
+		const names = result.columnNames();
+		const typeNames = result.columnTypes().map((t) => t?.toString() ?? 'unknown');
+		const rawRows = await result.getRowObjectsJS();
 
 		const columns: Column[] = names.map((name, i) => {
 			const typeName = typeNames[i] ?? 'unknown';
