@@ -154,9 +154,12 @@ type: duckdb
 # setup_sql: | # runs once when the client starts — INSTALL/LOAD extensions, CREATE SECRET, ATTACH remote databases
 #   INSTALL httpfs;
 #   LOAD httpfs;
+#   CREATE SECRET (TYPE s3, KEY_ID '\${S3_KEY_ID}', SECRET '\${S3_SECRET}'); # in-memory; PERSISTENT secrets are written to disk in plaintext
 #   ATTACH 's3://my-bucket/analytics.duckdb' AS s3_analytics (READ_ONLY);
 # setup_sql_path: ./setup.sql # alternative to inlining setup_sql, resolved relative to connection.yaml
 # schemas: ["<schema>"] # allowlist of schemas exposed to the schema browser, optional
+# allowed_paths: ["s3://my-bucket/"] # paths queries may read once locked (evidence serve locks by default)
+# lock: true # sandbox the instance after setup_sql; defaults to on in serve, off in dev
 `;
 
 const TEMPLATES: Record<InitWarehouse, string> = {
