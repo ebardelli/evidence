@@ -48,8 +48,10 @@ allowed_paths: ["gs://my-bucket/"]
   DuckDB `memory_limit`, e.g. `'4GB'`. Applied before `setup_sql`.
 </ResponseField>
 <ResponseField name="threads" type="number">
-  DuckDB worker thread count. Applied before `setup_sql`.
+  DuckDB worker thread count. Applied before `setup_sql`. Default: `4`.
 </ResponseField>
+
+The connector also turns on DuckDB's `enable_external_file_cache` before `setup_sql`, so blocks of remote files (`gs://`, `s3://`) stay in memory between queries.
 
 ## Locking in serve mode
 
