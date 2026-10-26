@@ -15,6 +15,18 @@ import { dialectFor, type SqlDialect, type WarehouseType } from '@evidence/core/
 
 export type ConnectionType = WarehouseType | null;
 
+// The page a query belongs to, as the slug the server resolves it by (`''` is
+// home). Serve mode authorizes every query against it (query-authz.server.ts);
+// dev mode ignores it. Read at send time so client-side navigation is honoured.
+function currentPageSlug(): string {
+	const pathname = globalThis.location?.pathname ?? '/';
+	try {
+		return decodeURIComponent(pathname).replace(/^\/+|\/+$/g, '');
+	} catch {
+		return pathname.replace(/^\/+|\/+$/g, '');
+	}
+}
+
 export class CLIQueryService implements QueryService {
 	readonly workspaceId: string;
 	readonly dialect: SqlDialect;
@@ -34,7 +46,7 @@ export class CLIQueryService implements QueryService {
 			const response = await fetch('/api/query', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ sql }),
+				body: JSON.stringify({ sql, page: currentPageSlug() }),
 				signal: opts?.signal
 			});
 

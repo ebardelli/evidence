@@ -5,6 +5,10 @@
  * states self-hosted deployments have no per-report access control), so it
  * intentionally lives only on this deployment's CLI, not upstream Evidence.
  *
+ * Page loaders call it for the rendered page; serve-mode `/api/query` calls it
+ * too (via query-authz.server.ts) for the page a query claims to come from,
+ * so a viewer can't fetch a gated page's data without opening the page.
+ *
  * `auth.users` and `auth.query` are additive: a viewer is allowed if their
  * email appears in either. Everything no-ops when `auth` is absent, or when
  * there's no proxy identity to check (dev mode always, serve mode when the
