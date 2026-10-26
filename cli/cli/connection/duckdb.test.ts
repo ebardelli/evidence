@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { executeDuckDBQuery, QueryRejectedError } from './duckdb';
@@ -89,6 +90,29 @@ describe('locked DuckDB instance', () => {
 		expect(e).toBeInstanceOf(QueryRejectedError);
 		expect((e as QueryRejectedError).status).toBe(400);
 		expect((e as Error).message).toBe('Only single SELECT statements are allowed');
+	});
+
+	it('loads the secret store before locking, so secret lookups still work', async () => {
+		const result = await executeDuckDBQuery('select count(*) as c from duckdb_secrets()', locked());
+		expect(result.rows).toHaveLength(1);
+	});
+
+	it('allows the system CA bundle file (for httpfs), but not its directory', async () => {
+		const bundle = [
+			'/etc/ssl/certs/ca-certificates.crt',
+			'/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+			'/etc/pki/tls/certs/ca-bundle.crt',
+			'/etc/ssl/ca-bundle.pem',
+			'/etc/ssl/cert.pem'
+		].find((p) => existsSync(p));
+		if (!bundle) return;
+		const config = locked();
+		await expect(
+			executeDuckDBQuery(`select count(*) from read_text('${bundle}')`, config)
+		).resolves.toBeDefined();
+		await expect(
+			executeDuckDBQuery(`select * from glob('${path.dirname(bundle)}/*')`, config)
+		).rejects.toThrow(/Permission Error/);
 	});
 
 	it('refuses unredacted secrets', async () => {
