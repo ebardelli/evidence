@@ -1,4 +1,13 @@
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, ServerInit } from '@sveltejs/kit';
+import { proxyAuthConfigured } from '$lib/server/proxy-auth.server';
+import {
+	identityMode,
+	pagesWithAuth,
+	plainHeaderTrusted,
+	queryAuthzEnabled
+} from '$lib/server/query-authz.server';
+import { supportsRelationCheck } from '$lib/server/query-relations';
+import { loadConnectionConfig } from '$cli/connection';
 import { stat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { isServeMode, basicAuthConfigured } from '$lib/server/serve-mode';
@@ -64,19 +73,67 @@ async function serveProjectStatic(pathname: string): Promise<Response | null> {
 	}
 }
 
-// Routes that only exist for Studio auth or dev reload — neither can occur in
-// serve mode (serve requires connection.yaml and ships immutable content).
+// Routes that only exist for Studio auth, dev reload or authoring tools —
+// none belong in serve mode (serve requires connection.yaml and ships
+// immutable content). /api/validate runs metadata queries and returns project
+// source with no page check; `evidence validate` calls it in-process instead.
 const SERVE_DISABLED_PATHS = [
 	'/login',
 	'/api/auth/status',
 	'/api/logout',
 	'/api/switch-org',
-	'/api/project-changed'
+	'/api/project-changed',
+	'/api/validate',
+	'/api/docs'
 ];
+
+// Serve-mode startup checks — throwing here stops `evidence serve` before it
+// binds a port (cli/cli/server.ts awaits server.init()). Fail closed: a page
+// with `auth:` and no proxy identity configured used to render for anyone.
+export const init: ServerInit = async () => {
+	if (!isServeMode()) return;
+
+	const authPages = await pagesWithAuth();
+	if (authPages.length > 0 && !proxyAuthConfigured()) {
+		throw new Error(
+			`These pages have an \`auth:\` block, but no reverse-proxy identity is configured ` +
+				`(EVIDENCE_AUTH_PROXY_JWT_JWKS_URL or EVIDENCE_AUTH_PROXY_EMAIL_HEADER): ${authPages.join(', ')}`
+		);
+	}
+
+	if (!queryAuthzEnabled()) {
+		console.warn(
+			'EVIDENCE_QUERY_AUTHZ=off: /api/query runs any SQL a viewer sends, without page authorization.'
+		);
+		return;
+	}
+
+	if (identityMode() === 'header') {
+		if (!plainHeaderTrusted()) {
+			throw new Error(
+				'EVIDENCE_AUTH_PROXY_EMAIL_HEADER is set without JWT verification. Queries need a verified ' +
+					'identity: configure EVIDENCE_AUTH_PROXY_JWT_JWKS_URL, or set ' +
+					'EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true if only the proxy can reach this server.'
+			);
+		}
+		console.warn(
+			'EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true: query authorization trusts an unsigned identity header.'
+		);
+	}
+
+	const connection = await loadConnectionConfig(getProjectCwd()).catch(() => null);
+	if (connection && !supportsRelationCheck(connection.type)) {
+		console.warn(
+			`Query authorization: ${connection.type} connections get page-level checks only; ` +
+				'per-page table allowlists need a DuckDB or MotherDuck connection.'
+		);
+	}
+};
 
 // Serve-mode perimeter: basic auth gate + hardened headers. All traffic —
 // static assets, SSR pages, and the /api/query SQL relay — flows through
-// hooks, so this is the single choke point.
+// hooks, so this is the single choke point. Per-page query authorization
+// happens in the /api/query route itself (query-authz.server.ts).
 export const handle: Handle = async ({ event, resolve }) => {
 	if (event.request.method === 'GET') {
 		const staticResponse = await serveProjectStatic(event.url.pathname);
