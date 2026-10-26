@@ -57,6 +57,89 @@ export const duckdbBase = z.object({
 				description: 'Allowlist of schemas exposed to the editor and schema browser.',
 				category: 'visibility'
 			})
+		),
+
+	// Sandboxing applied after setup_sql runs — see cli/cli/connection/duckdb.ts's
+	// lockInstance. Local entries resolve relative to connection.yaml; URL
+	// prefixes (gs://, s3://, https://) pass through as written.
+	allowed_paths: z
+		.array(z.string().min(1))
+		.default([])
+		.meta(
+			meta({
+				label: 'Allowed paths',
+				description:
+					'Directory prefixes (local or remote, e.g. gs://bucket/) that queries may read once the instance is locked. Becomes DuckDB allowed_directories.',
+				category: 'context',
+				cliOnly: true
+			})
+		),
+
+	lock: z
+		.boolean()
+		.optional()
+		.meta(
+			meta({
+				label: 'Lock',
+				description:
+					'Lock the instance after setup_sql: no file access outside allowed_paths, no extension loading, no settings changes, single SELECT statements only. Defaults to on in `evidence serve`, off in `evidence dev`.',
+				category: 'context',
+				cliOnly: true
+			})
+		),
+
+	query_timeout_seconds: z
+		.number()
+		.positive()
+		.default(120)
+		.meta(
+			meta({
+				label: 'Query timeout (seconds)',
+				description: 'Interrupt a locked-instance query that runs longer than this.',
+				category: 'context',
+				cliOnly: true
+			})
+		),
+
+	max_result_rows: z
+		.number()
+		.int()
+		.positive()
+		.default(100_000)
+		.meta(
+			meta({
+				label: 'Max result rows',
+				description: 'Reject (rather than truncate) a locked-instance result with more rows than this.',
+				category: 'context',
+				cliOnly: true
+			})
+		),
+
+	memory_limit: z
+		.string()
+		.min(1)
+		.optional()
+		.meta(
+			meta({
+				label: 'Memory limit',
+				description: "DuckDB memory_limit, e.g. '4GB'. Set before setup_sql runs.",
+				category: 'context',
+				cliOnly: true
+			})
+		),
+
+	threads: z
+		.number()
+		.int()
+		.positive()
+		.optional()
+		.meta(
+			meta({
+				label: 'Threads',
+				description: 'DuckDB worker thread count. Set before setup_sql runs.',
+				category: 'context',
+				cliOnly: true
+			})
 		)
 });
 

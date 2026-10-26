@@ -39,9 +39,21 @@ export async function resolveDuckDBCredentials(
 			? config.path
 			: path.join(opts.cwd, config.path);
 
+	// Local allowed_paths resolve like `path`; anything with a URL scheme
+	// (gs://, s3://, https://, …) is a remote prefix and passes through as-is.
+	const allowedPaths = config.allowed_paths.map((p) =>
+		/^[a-z][a-z0-9+.-]*:\/\//i.test(p) || path.isAbsolute(p) ? p : path.join(opts.cwd, p)
+	);
+
 	return {
 		path: dbPath,
 		schemas: config.schemas,
-		setupSql
+		setupSql,
+		allowedPaths,
+		lock: config.lock,
+		queryTimeoutSeconds: config.query_timeout_seconds,
+		maxResultRows: config.max_result_rows,
+		memoryLimit: config.memory_limit,
+		threads: config.threads
 	};
 }

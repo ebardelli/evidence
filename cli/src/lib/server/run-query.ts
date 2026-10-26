@@ -111,7 +111,9 @@ export async function runQuery(sql: string): Promise<RunQueryResult> {
 				rows: [],
 				columns: [],
 				error: e instanceof Error ? e.message : 'Query execution failed',
-				status: 500
+				// Connectors can raise a status-carrying error for a deliberate
+				// refusal (e.g. duckdb.ts's QueryRejectedError: 400/413/504).
+				status: typeof (e as { status?: unknown }).status === 'number' ? (e as { status: number }).status : 500
 			};
 		}
 	}

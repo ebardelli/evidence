@@ -28,7 +28,8 @@ import yaml from 'js-yaml';
 // chance to extract the addon and put it on NODE_PATH — see loadDuckDBApi.
 import type {
 	DuckDBInstance as DuckDBInstanceType,
-	DuckDBConnection as DuckDBNativeConnection
+	DuckDBConnection as DuckDBNativeConnection,
+	DuckDBPreparedStatement as DuckDBPreparedStatementType
 } from '@duckdb/node-api';
 import { normalizeDateRows } from '@evidence/core/connectors/postgres/normalize-date-rows';
 import { normalizeNumericRows } from '@evidence/core/connectors/postgres/normalize-numeric-rows';
@@ -37,6 +38,7 @@ import { getDuckDBToJsType } from '@evidence/core/connectors/duckdb/type-mapping
 import type { DuckDBCredentials } from '@evidence/core/connectors/duckdb/credentials';
 import type { Column } from '@evidence/core/user-components/interfaces/query-service';
 import type { QueryResult } from './types';
+import { redactInterpolatedValues } from './load-config';
 import { spawnForegroundChild } from '../server.shared.ts';
 
 // ============================================================================
@@ -185,16 +187,71 @@ function loadDuckDBApi(): Promise<typeof import('@duckdb/node-api')> {
 }
 
 /**
- * One cached in-process DuckDB instance per unique (path, setupSql) — reused
- * across queries in this process so `:memory:` state (and anything setupSql
+ * Raised for a request the locked instance refuses on purpose (bad statement,
+ * timeout, oversized result) — carries the HTTP status `/api/query` should
+ * answer with (run-query.ts reads `status`), and a message safe to show a
+ * viewer: never parser internals.
+ */
+export class QueryRejectedError extends Error {
+	constructor(
+		message: string,
+		readonly status: number
+	) {
+		super(message);
+		this.name = 'QueryRejectedError';
+	}
+}
+
+const DEFAULT_QUERY_TIMEOUT_SECONDS = 120;
+const DEFAULT_MAX_RESULT_ROWS = 100_000;
+
+// Unset `lock` follows the run mode: on for `evidence serve` (viewers reach
+// this through /api/query), off for `evidence dev` (the author is the viewer).
+// EVIDENCE_SERVE is set by the CLI entrypoint before anything runs a query.
+function shouldLock(config: DuckDBCredentials): boolean {
+	return config.lock ?? !!process.env.EVIDENCE_SERVE;
+}
+
+function sqlString(value: string): string {
+	return `'${value.replace(/'/g, "''")}'`;
+}
+
+// Order matters: lock_configuration must come last, since after it no SET /
+// RESET / PRAGMA (from setup or a viewer) can change any of the others. With
+// enable_external_access off, DuckDB still permits paths under
+// allowed_directories and refuses everything else — read_*, glob, COPY, ATTACH.
+function lockStatements(config: DuckDBCredentials): string[] {
+	const allowed = (config.allowedPaths ?? []).map(sqlString).join(', ');
+	return [
+		`SET allowed_directories = [${allowed}]`,
+		'SET autoinstall_known_extensions = false',
+		'SET autoload_known_extensions = false',
+		'SET allow_community_extensions = false',
+		'SET allow_unredacted_secrets = false',
+		'SET enable_external_access = false',
+		'SET lock_configuration = true'
+	];
+}
+
+/**
+ * One cached in-process DuckDB instance per unique config — reused across
+ * queries in this process so `:memory:` state (and anything setupSql
  * ATTACHed) survives between queries, same rationale as motherduck.ts's
  * cached pool. Each query opens (and closes) its own connection from it.
  */
 let cachedInstance: { key: string; instance: Promise<DuckDBInstanceType> } | null = null;
 let shutdownHandlerRegistered = false;
+let unlockedWarningLogged = false;
 
 function configKey(c: DuckDBCredentials): string {
-	return JSON.stringify([c.path, c.setupSql]);
+	return JSON.stringify([
+		c.path,
+		c.setupSql,
+		shouldLock(c),
+		c.allowedPaths ?? [],
+		c.memoryLimit,
+		c.threads
+	]);
 }
 
 function closeCachedInstance(entry: { instance: Promise<DuckDBInstanceType> } | null): void {
@@ -215,6 +272,45 @@ function registerShutdownHandler(): void {
 	process.once('SIGTERM', closeOnShutdown);
 }
 
+async function createInstance(config: DuckDBCredentials): Promise<DuckDBInstanceType> {
+	const { DuckDBInstance } = await loadDuckDBApi();
+	const instance = await DuckDBInstance.create(config.path);
+	const lock = shouldLock(config);
+	if (!lock && config.lock === false && process.env.EVIDENCE_SERVE && !unlockedWarningLogged) {
+		unlockedWarningLogged = true;
+		console.warn(
+			'connection.yaml: `lock: false` — viewer queries can read and write files, load extensions and change DuckDB settings.'
+		);
+	}
+
+	const setupConnection = await instance.connect();
+	try {
+		// Sizing first, so setup_sql's ATTACHes and loads already run within it.
+		if (config.memoryLimit) await setupConnection.run(`SET memory_limit = ${sqlString(config.memoryLimit)}`);
+		if (config.threads) await setupConnection.run(`SET threads = ${Math.floor(config.threads)}`);
+		if (config.setupSql) {
+			try {
+				await setupConnection.run(config.setupSql);
+			} catch (e) {
+				// DuckDB errors can quote the failing setup_sql text, which may
+				// carry `${VAR}`-interpolated secrets — scrub before it's logged.
+				throw new Error(`setup_sql failed: ${redactInterpolatedValues((e as Error).message)}`);
+			}
+		}
+		if (lock) {
+			for (const statement of lockStatements(config)) await setupConnection.run(statement);
+		}
+	} catch (e) {
+		// Never hand out an instance that's half set up or unlocked: close it,
+		// and let the rejected promise stay cached so every later query fails too.
+		setupConnection.disconnectSync();
+		instance.closeSync();
+		throw e;
+	}
+	setupConnection.disconnectSync();
+	return instance;
+}
+
 async function getInstance(config: DuckDBCredentials): Promise<DuckDBInstanceType> {
 	const key = configKey(config);
 	if (cachedInstance?.key === key) return cachedInstance.instance;
@@ -223,22 +319,7 @@ async function getInstance(config: DuckDBCredentials): Promise<DuckDBInstanceTyp
 	// rationale as every other connector's pool/client teardown on replace.
 	closeCachedInstance(cachedInstance);
 
-	cachedInstance = {
-		key,
-		instance: (async () => {
-			const { DuckDBInstance } = await loadDuckDBApi();
-			const instance = await DuckDBInstance.create(config.path);
-			if (config.setupSql) {
-				const setupConnection = await instance.connect();
-				try {
-					await setupConnection.run(config.setupSql);
-				} finally {
-					setupConnection.disconnectSync();
-				}
-			}
-			return instance;
-		})()
-	};
+	cachedInstance = { key, instance: createInstance(config) };
 	registerShutdownHandler();
 	return cachedInstance.instance;
 }
@@ -252,6 +333,53 @@ function toSerializable(value: unknown): unknown {
 	return value;
 }
 
+// json_serialize_sql parses without binding, and reports any non-SELECT as
+// error_type "not implemented" ("Only SELECT statements can be serialized").
+async function isNonSelectStatement(
+	connection: DuckDBNativeConnection,
+	sql: string
+): Promise<boolean> {
+	try {
+		const result = await connection.run(`SELECT json_serialize_sql(${sqlString(sql)}) AS j`);
+		const [row] = await result.getRowObjectsJS();
+		const parsed = JSON.parse(String(row?.j)) as { error?: boolean; error_type?: string };
+		return parsed.error === true && parsed.error_type === 'not implemented';
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Locked instances accept exactly one SELECT. Defence in depth: the lock
+ * settings are what actually stop file access (a SELECT can still call table
+ * functions), this just refuses DDL/DML/ATTACH/SET/… before they reach it.
+ */
+async function prepareSingleSelect(
+	connection: DuckDBNativeConnection,
+	sql: string
+): Promise<DuckDBPreparedStatementType> {
+	const { StatementType } = await loadDuckDBApi();
+	const rejected = new QueryRejectedError('Only single SELECT statements are allowed', 400);
+	const extracted = await connection.extractStatements(sql);
+	if (extracted.count !== 1) throw rejected;
+	let prepared: DuckDBPreparedStatementType;
+	try {
+		prepared = await extracted.prepare(0);
+	} catch (e) {
+		// Binding can fail before the type check runs — e.g. COPY TO / CREATE
+		// SECRET hit the lock's permission error at prepare time. Classify the
+		// statement with the parser alone: a non-SELECT is a policy refusal,
+		// anything else (syntax/bind errors in the author's SELECT) propagates.
+		if (await isNonSelectStatement(connection, sql)) throw rejected;
+		throw e;
+	}
+	if (prepared.statementType !== StatementType.SELECT) {
+		prepared.destroySync();
+		throw rejected;
+	}
+	return prepared;
+}
+
 export async function executeDuckDBQuery(
 	sql: string,
 	config: DuckDBCredentials
@@ -260,16 +388,48 @@ export async function executeDuckDBQuery(
 
 	const instance = await getInstance(config);
 	const connection: DuckDBNativeConnection = await instance.connect();
+	const locked = shouldLock(config);
+	const maxRows = config.maxResultRows ?? DEFAULT_MAX_RESULT_ROWS;
+	let timedOut = false;
+	const timer = locked
+		? setTimeout(
+				() => {
+					timedOut = true;
+					connection.interrupt();
+				},
+				(config.queryTimeoutSeconds ?? DEFAULT_QUERY_TIMEOUT_SECONDS) * 1000
+			)
+		: undefined;
 	try {
-		const result = await connection.run(sql);
-		const names = result.columnNames();
-		const types = result.columnTypes();
+		let names: string[];
+		let typeNames: string[];
+		let rawRows: Record<string, unknown>[];
+		if (locked) {
+			const prepared = await prepareSingleSelect(connection, sql);
+			// Read one past the cap so an oversized result is detected without
+			// materializing all of it.
+			const reader = await prepared.runAndReadUntil(maxRows + 1);
+			if (reader.currentRowCount > maxRows) {
+				throw new QueryRejectedError(
+					`Query returned more than ${maxRows} rows (max_result_rows)`,
+					413
+				);
+			}
+			names = reader.columnNames();
+			typeNames = reader.columnTypes().map((t) => t?.toString() ?? 'unknown');
+			rawRows = reader.getRowObjectsJS();
+		} else {
+			const result = await connection.run(sql);
+			names = result.columnNames();
+			typeNames = result.columnTypes().map((t) => t?.toString() ?? 'unknown');
+			rawRows = await result.getRowObjectsJS();
+		}
+
 		const columns: Column[] = names.map((name, i) => {
-			const typeName = types[i]?.toString() ?? 'unknown';
+			const typeName = typeNames[i] ?? 'unknown';
 			return { name, clickhouseType: typeName, jsType: getDuckDBToJsType(typeName) };
 		});
 
-		const rawRows = await result.getRowObjectsJS();
 		const rows: Record<string, unknown>[] = rawRows.map((r) => {
 			const row: Record<string, unknown> = {};
 			for (const col of columns) row[col.name] = toSerializable(r[col.name]);
@@ -283,7 +443,11 @@ export async function executeDuckDBQuery(
 		normalizeSparklineRows(rows, columns);
 
 		return { rows, columns };
+	} catch (e) {
+		if (timedOut) throw new QueryRejectedError('Query timed out (query_timeout_seconds)', 504);
+		throw e;
 	} finally {
+		clearTimeout(timer);
 		connection.disconnectSync();
 	}
 }
