@@ -75,6 +75,7 @@ For proxies that only forward a plain header — Authelia/Authentik's `Remote-Em
 | --- | --- |
 | `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` | Name of the inbound header holding the viewer's email (e.g. `X-Auth-Request-Email`). Ignored when JWT mode (above) is configured. |
 | `EVIDENCE_AUTH_PROXY_NAME_HEADER` | Optional: name of the inbound header holding a display name (e.g. `X-Auth-Request-User`) |
+| `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER` | Set to `true` to accept the plain header for [query authorization](#authorizing-queries). Without it, `evidence serve` refuses to start in plain header mode. |
 
 <Warning>
   Unlike JWT mode, this is not cryptographically verified — it only changes what the sidebar displays and what `{{ $user.* }}` resolves to based on whatever value is in the header. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity, including bypassing the [page allowlist](#restricting-individual-pages-to-an-allowlist) below. Prefer JWT verification above when your proxy supports it.
@@ -153,7 +154,9 @@ auth:
 | `auth.query` | SQL query whose first result column is read as allowed emails. Cached for 60 seconds per query. |
 | `auth.message` | Custom message shown to a denied viewer, in place of the default "does not have access" text. `{email}` is replaced with the viewer's email. |
 
-If the frontmatter block is absent, the page is unrestricted (unchanged from default behavior). If it's present, a request without a proxy identity (JWT mode not configured or the token missing/invalid, or plain header mode not configured or the header missing/blank) is refused with a 403, as is a viewer whose email matches neither list. This check only runs in `evidence serve`; in `evidence dev` there is no proxy identity to check against, so pages render normally for local authoring.
+If the frontmatter block is absent, the page is unrestricted (unchanged from default behavior). If it's present, a request without a proxy identity (the token missing/invalid in JWT mode, or the header missing/blank in plain header mode) is refused with a 403, as is a viewer whose email matches neither list. If any page has an `auth:` block but neither JWT nor plain header mode is configured, `evidence serve` refuses to start and names those pages. This check only runs in `evidence serve`; in `evidence dev` there is no proxy identity to check against, so pages render normally for local authoring.
+
+The same check also applies to the page's queries. See [Authorizing queries](#authorizing-queries) below.
 
 Use `auth.message` to tell a denied viewer how to get access, instead of the generic default:
 
@@ -164,6 +167,24 @@ auth:
   message: "{email} isn't on the Finance team. Ask in #finance-access for a share."
 ---
 ```
+
+## Authorizing queries
+
+Pages fetch their data from the browser through Evidence's `/api/query` endpoint. In `evidence serve`, every request to it must name the page it comes from, and Evidence checks it before running anything:
+
+1. **Identity.** If any page has an `auth:` block, the request needs a proxy identity, or it gets a 401. Plain header identities count only with `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true`.
+2. **Page access.** The page must exist (404 otherwise), and the viewer must pass its `auth:` block, using the same check and the same `auth.query` cache as loading the page (403 otherwise, with the page's `auth.message`). A viewer can't fetch a gated page's data by naming it from another page.
+3. **Tables.** On DuckDB and MotherDuck connections, the SQL must be a single `SELECT`, and every table and table function it reads must be one that the page's own queries read (403 otherwise). Inputs used with `.literal` (for example `from {{db_selector.literal}}.students`) only allow their own options: the inline `options`, or the values of their `data` query.
+
+`evidence dev` runs any SQL as before.
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_QUERY_AUTHZ` | Set to `off` to go back to running any SQL the browser sends in `evidence serve`, and log a warning at startup. Temporary: kept for one release. |
+
+<Warning>
+  The table check limits which tables a page's queries can reach. It doesn't limit what a viewer does with those tables: someone allowed onto a page can still write their own `SELECT` against the tables that page reads, for example to see raw rows behind an aggregate. Table and column names (not data) from `information_schema` are readable from any page, because table filters and dimension grids need them. On connections other than DuckDB and MotherDuck, only the identity and page access checks run.
+</Warning>
 
 ## Supported proxies and providers
 
