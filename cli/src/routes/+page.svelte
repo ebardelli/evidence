@@ -6,6 +6,7 @@
 	import { page } from '$app/state';
 	import { generateThemeCSS } from '@evidence/core/theme/theme-css-helper';
 	import { setThemeContext } from '@evidence/core/theme/theme.context.svelte';
+	import { pageWidthMaxWidth } from '@evidence/core/config/page-frontmatter-schema';
 
 	interface Props {
 		data: PageData;
@@ -26,10 +27,9 @@
 
 	const pageSettings = $derived(data.markdown?.pageSettings ?? {});
 	const cards = $derived(pageSettings.cards ?? false);
-	// 'full' spans the viewport (like fullscreen); 'article'/default is a narrow column.
-	const widthClass = $derived(
-		fullscreen || pageSettings.page_width === 'full' ? '' : 'max-w-[64rem]'
-	);
+	// 'full' spans the viewport (like fullscreen); 'article'/default is a narrow column;
+	// a custom width (`1200`, `80rem`, `90%`) caps the column at that size.
+	const maxWidth = $derived(fullscreen ? undefined : pageWidthMaxWidth(pageSettings.page_width));
 </script>
 
 <svelte:head>
@@ -50,7 +50,7 @@
 {/if}
 
 <div class="min-h-full {cards ? 'bg-card-mode-background' : 'bg-background'}">
-	<div class="mx-auto p-4 {widthClass}">
+	<div class="mx-auto p-4" style:max-width={maxWidth}>
 		{#if tree && (data.organizationId || data.hasLocalConnection)}
 			<!-- Queries run via managed engine (organizationId) or local connection.yaml -->
 			<CLIPageWrapper

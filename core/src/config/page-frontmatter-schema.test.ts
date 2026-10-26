@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
-import { isPageDownloadEnabled, projectRootPageFrontmatterSchema } from './page-frontmatter-schema';
+import {
+	isPageDownloadEnabled,
+	pageWidthMaxWidth,
+	projectRootPageFrontmatterSchema
+} from './page-frontmatter-schema';
 
 const downIsGood = (frontmatter: string) =>
 	projectRootPageFrontmatterSchema.parse(yaml.load(frontmatter)).down_is_good;
@@ -69,5 +73,41 @@ describe('isPageDownloadEnabled', () => {
 
 	it('leaves downloads on for an unparseable value', () => {
 		expect(isPageDownloadEnabled(parseDownloads('nope'), 'pdf')).toBe(true);
+	});
+});
+
+const pageWidth = (frontmatter: string) =>
+	projectRootPageFrontmatterSchema.parse(yaml.load(frontmatter)).page_width;
+
+describe('page_width frontmatter', () => {
+	it.each([
+		['page_width: article', 'article'],
+		['page_width: full', 'full'],
+		['page_width: 1200', 1200],
+		['page_width: 80rem', '80rem'],
+		['page_width: " 1400PX "', '1400px'],
+		['page_width: 90%', '90%'],
+		['page_width: "1200"', '1200'],
+		['page_width: wide', undefined],
+		['page_width: 0', undefined],
+		['page_width: -5', undefined],
+		['page_width: 80 rem', undefined],
+		['title: Costs', undefined]
+	])('%s → %s', (frontmatter, expected) => {
+		expect(pageWidth(frontmatter)).toBe(expected);
+	});
+});
+
+describe('pageWidthMaxWidth', () => {
+	it.each([
+		[undefined, '64rem'],
+		['article', '64rem'],
+		['full', undefined],
+		[1200, '1200px'],
+		['1200', '1200px'],
+		['80rem', '80rem'],
+		['90%', '90%']
+	] as const)('%s → %s', (width, expected) => {
+		expect(pageWidthMaxWidth(width)).toBe(expected);
 	});
 });
