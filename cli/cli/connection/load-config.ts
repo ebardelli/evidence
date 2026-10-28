@@ -47,9 +47,13 @@ const CONFIG_FILENAME = 'connection.yaml';
 // name position is left untouched.
 const ENV_PATTERN = /\$\{([A-Z][A-Z0-9_]*)\}/g;
 
-// Every value substituted for a `${VAR}`, so an error that echoes back config
-// text (e.g. a DuckDB parser error quoting setup_sql) can be scrubbed before
-// it reaches a log or an HTTP response — see redactInterpolatedValues.
+// Every value substituted for a `${VAR}` inside setup_sql, so an error that
+// echoes it back (a DuckDB parser error quoting the failing statement) can be
+// scrubbed before it reaches a log or an HTTP response — see
+// redactInterpolatedValues. Only setup_sql: redacting e.g. a `${DATA_DIR}`
+// path would garble messages without hiding anything secret. Rebuilt on every
+// load, so rotated values don't linger.
+const REDACTED_KEY = 'setup_sql';
 const interpolatedValues = new Set<string>();
 
 /** Replaces any `${VAR}`-interpolated connection.yaml value in `message` with `[redacted]`. */
@@ -62,7 +66,7 @@ export function redactInterpolatedValues(message: string): string {
 	return redacted;
 }
 
-function interpolateValue(value: unknown): unknown {
+function interpolateValue(value: unknown, redact = false): unknown {
 	if (typeof value === 'string') {
 		return value.replace(ENV_PATTERN, (match, name: string) => {
 			const envValue = process.env[name];
@@ -72,14 +76,17 @@ function interpolateValue(value: unknown): unknown {
 				);
 			}
 			// Skip trivially short values — redacting e.g. "1" would mangle messages.
-			if (envValue.length >= 4) interpolatedValues.add(envValue);
+			if (redact && envValue.length >= 4) interpolatedValues.add(envValue);
 			return envValue;
 		});
 	}
-	if (Array.isArray(value)) return value.map(interpolateValue);
+	if (Array.isArray(value)) return value.map((v) => interpolateValue(v, redact));
 	if (value !== null && typeof value === 'object') {
 		return Object.fromEntries(
-			Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, interpolateValue(v)])
+			Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+				k,
+				interpolateValue(v, redact || k === REDACTED_KEY)
+			])
 		);
 	}
 	return value;
@@ -98,6 +105,7 @@ export async function loadConnectionConfig(cwd: string): Promise<ConnectionConfi
 
 	let parsed: unknown;
 	try {
+		interpolatedValues.clear();
 		parsed = interpolateValue(yaml.load(raw));
 	} catch (e) {
 		if (e instanceof Error && e.message.startsWith(CONFIG_FILENAME)) throw e;

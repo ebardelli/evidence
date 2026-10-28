@@ -88,9 +88,12 @@ export const duckdbBase = z.object({
 			})
 		),
 
+	// Capped where the timer's milliseconds still fit setTimeout's 32-bit
+	// delay; past that Node fires it after 1ms and every query times out.
 	query_timeout_seconds: z
 		.number()
 		.positive()
+		.max(2_147_483)
 		.default(120)
 		.meta(
 			meta({

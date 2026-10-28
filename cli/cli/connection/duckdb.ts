@@ -34,6 +34,7 @@ import { normalizeDateRows } from '@evidence/core/connectors/postgres/normalize-
 import { normalizeNumericRows } from '@evidence/core/connectors/postgres/normalize-numeric-rows';
 import { normalizeSparklineRows } from '@evidence/core/connectors/normalize-sparkline-rows';
 import { getDuckDBToJsType } from '@evidence/core/connectors/duckdb/type-mapping';
+import { escapeAnsiStringLiteral } from '@evidence/core/sql-dialect/common';
 import type { DuckDBCredentials } from '@evidence/core/connectors/duckdb/credentials';
 import type { Column } from '@evidence/core/user-components/interfaces/query-service';
 import type { QueryResult } from './types';
@@ -213,7 +214,7 @@ function shouldLock(config: DuckDBCredentials): boolean {
 }
 
 function sqlString(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
+	return `'${escapeAnsiStringLiteral(value)}'`;
 }
 
 // Where httpfs looks for a CA bundle (its own error lists these), with
@@ -322,9 +323,16 @@ async function createInstance(config: DuckDBCredentials): Promise<DuckDBInstance
 			try {
 				await setupConnection.run(config.setupSql);
 			} catch (e) {
-				// DuckDB errors can quote the failing setup_sql text, which may
-				// carry `${VAR}`-interpolated secrets — scrub before it's logged.
-				throw new Error(`setup_sql failed: ${redactInterpolatedValues((e as Error).message)}`);
+				// DuckDB errors can quote the failing setup_sql text, secrets and
+				// all. `${VAR}` values are scrubbed, but a literal one (inline, or
+				// from setup_sql_path, which isn't interpolated) can't be told
+				// apart — so in serve mode, where this error is cached and becomes
+				// every viewer's /api/query response, the detail only goes to the
+				// server log.
+				const detail = `setup_sql failed: ${redactInterpolatedValues((e as Error).message)}`;
+				if (!process.env.EVIDENCE_SERVE) throw new Error(detail);
+				console.error(detail);
+				throw new Error('setup_sql failed (details in the server log)');
 			}
 		}
 		if (lock) {
@@ -363,37 +371,84 @@ function toSerializable(value: unknown): unknown {
 	return value;
 }
 
+function notSingleSelect(): QueryRejectedError {
+	return new QueryRejectedError('Only single SELECT statements are allowed', 400);
+}
+
 // json_serialize_sql parses without binding, and reports any non-SELECT as
 // error_type "not implemented" ("Only SELECT statements can be serialized").
-async function isNonSelectStatement(
+async function isNonSelect(connection: DuckDBNativeConnection, sql: string): Promise<boolean> {
+	const result = await connection.run(`SELECT json_serialize_sql(${sqlString(sql)}) AS j`);
+	const [row] = await result.getRowObjectsJS();
+	const parsed = JSON.parse(String(row?.j)) as { error?: boolean; error_type?: string };
+	return parsed.error === true && parsed.error_type === 'not implemented';
+}
+
+/**
+ * Only asked once a wrapped query has already failed, to pick its error
+ * message — never what decides whether SQL runs. Statements like
+ * `INSTALL httpfs` or `DETACH memory` still parse inside the wrapper, as a
+ * parenthesized table and its alias, and fail binding with a puzzling
+ * "Table … does not exist". json_serialize_sql flags them, but flags PIVOT the
+ * same way, so both texts are asked: a refused statement is a non-SELECT on
+ * its own but serializes once wrapped (it became a table reference); PIVOT is
+ * flagged either way.
+ */
+async function isRefusedStatement(
 	connection: DuckDBNativeConnection,
-	sql: string
+	sql: string,
+	wrapped: string
 ): Promise<boolean> {
 	try {
-		const result = await connection.run(`SELECT json_serialize_sql(${sqlString(sql)}) AS j`);
-		const [row] = await result.getRowObjectsJS();
-		const parsed = JSON.parse(String(row?.j)) as { error?: boolean; error_type?: string };
-		return parsed.error === true && parsed.error_type === 'not implemented';
+		return (await isNonSelect(connection, sql)) && !(await isNonSelect(connection, wrapped));
 	} catch {
 		return false;
 	}
 }
 
 /**
- * Locked instances accept exactly one SELECT. Defence in depth: the lock
- * settings are what actually stop file access (a SELECT can still call table
- * functions), this just refuses DDL/DML/ATTACH/SET/… before they reach it.
+ * Locked instances accept exactly one SELECT, run as
+ * `FROM (<sql>) LIMIT <maxRows + 1>`. Defence in depth: the lock settings are
+ * what actually stop file access (a SELECT can still call table functions),
+ * this just refuses DDL/DML/ATTACH/SET/… before they reach it.
  *
- * Classified with the parser alone (extractStatements + json_serialize_sql),
- * never by preparing the statement: running a query as a prepared statement
- * measured ~1.5s slower per query on the remote warehouse than a plain run().
- * A syntax error isn't a policy refusal — it falls through and run() reports it.
+ * The wrapper is the whole check, and fails closed: only a query (SELECT,
+ * FROM-first, PIVOT, DESCRIBE, SUMMARIZE, …) parses as a subquery, and text
+ * that parses as exactly one statement beginning `FROM (` is a SELECT however
+ * the viewer's SQL tries to close the parenthesis early. Anything that doesn't
+ * parse never runs. The LIMIT also bounds what run() materializes, so
+ * max_result_rows caps memory, not just the response.
+ *
+ * Parser only, never a prepared statement: preparing measured ~1.5s slower per
+ * query on the remote warehouse than a plain run().
  */
-async function assertSingleSelect(connection: DuckDBNativeConnection, sql: string): Promise<void> {
-	const rejected = new QueryRejectedError('Only single SELECT statements are allowed', 400);
-	const extracted = await connection.extractStatements(sql);
-	if (extracted.count !== 1) throw rejected;
-	if (await isNonSelectStatement(connection, sql)) throw rejected;
+async function lockedQuerySql(
+	connection: DuckDBNativeConnection,
+	sql: string,
+	maxRows: number
+): Promise<string> {
+	const rejected = notSingleSelect();
+	// The C API reads SQL only up to a NUL, so text after one would be parsed
+	// and run as something other than what was sent.
+	if (sql.includes('\0')) throw rejected;
+	// Leading text on the same line keeps DuckDB's LINE numbers matching the
+	// viewer's SQL; the closing newline ends any trailing `--` comment.
+	const wrapped = `FROM (${sql.replace(/[\s;]+$/, '')}\n) LIMIT ${maxRows + 1}`;
+	let count: number;
+	try {
+		count = (await connection.extractStatements(wrapped)).count;
+	} catch {
+		// A syntax error in the SQL as sent is the viewer's to see; SQL that
+		// parses on its own but not as a subquery is a statement we refuse.
+		try {
+			await connection.extractStatements(sql);
+		} catch (e) {
+			throw new Error((e as Error).message.replace(/^Failed to extract statements: /, ''));
+		}
+		throw rejected;
+	}
+	if (count !== 1) throw rejected;
+	return wrapped;
 }
 
 export async function executeDuckDBQuery(
@@ -416,12 +471,13 @@ export async function executeDuckDBQuery(
 				(config.queryTimeoutSeconds ?? DEFAULT_QUERY_TIMEOUT_SECONDS) * 1000
 			)
 		: undefined;
+	let wrapped: string | undefined;
 	try {
-		if (locked) await assertSingleSelect(connection, sql);
-		const result = await connection.run(sql);
-		// The row cap is checked on the materialized result rather than with a
-		// streaming reader: streaming (like prepared execution) was measurably
-		// slower, and memory is bounded by memory_limit either way.
+		if (locked) wrapped = await lockedQuerySql(connection, sql, maxRows);
+		const result = await connection.run(wrapped ?? sql);
+		// The wrapper's LIMIT fetches one row past the cap, so a result that
+		// would have been truncated is refused instead. Not a streaming reader:
+		// streaming (like prepared execution) was measurably slower.
 		if (locked && result.rowCount > maxRows) {
 			throw new QueryRejectedError(
 				`Query returned more than ${maxRows} rows (max_result_rows)`,
@@ -452,6 +508,13 @@ export async function executeDuckDBQuery(
 		return { rows, columns };
 	} catch (e) {
 		if (timedOut) throw new QueryRejectedError('Query timed out (query_timeout_seconds)', 504);
+		if (
+			wrapped &&
+			!(e instanceof QueryRejectedError) &&
+			(await isRefusedStatement(connection, sql, wrapped))
+		) {
+			throw notSingleSelect();
+		}
 		throw e;
 	} finally {
 		clearTimeout(timer);

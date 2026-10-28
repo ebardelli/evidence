@@ -325,6 +325,11 @@ describe('loadConnectionConfig', () => {
 			expect(cfg).toMatchObject({ type: 'duckdb', setupSql: 'INSTALL httpfs;\nLOAD httpfs;' });
 		});
 
+		it('rejects a query_timeout_seconds past what setTimeout can hold', async () => {
+			await writeYaml(`type: duckdb\nquery_timeout_seconds: 10000000\n`);
+			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/query_timeout_seconds/);
+		});
+
 		it('rejects both setup_sql and setup_sql_path', async () => {
 			await writeYaml(`type: duckdb\nsetup_sql: "INSTALL httpfs;"\nsetup_sql_path: ./setup.sql\n`);
 			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/Provide only one of/);
@@ -360,6 +365,25 @@ describe('loadConnectionConfig', () => {
 				expect(redactInterpolatedValues("near 'gcs-hmac-s3cr3t')")).toBe("near '[redacted]')");
 			} finally {
 				delete process.env.SERVE_TEST_DUCKDB_SECRET;
+			}
+		});
+
+		it('redacts only setup_sql values, and only from the latest load', async () => {
+			process.env.SERVE_TEST_DUCKDB_SECRET = 'old-s3cr3t';
+			process.env.SERVE_TEST_DUCKDB_DIR = '/srv/data';
+			try {
+				await writeYaml(
+					`type: duckdb\npath: \${SERVE_TEST_DUCKDB_DIR}/db.duckdb\nsetup_sql: "SELECT '\${SERVE_TEST_DUCKDB_SECRET}'"\n`
+				);
+				await loadConnectionConfig(workDir);
+				expect(redactInterpolatedValues('/srv/data old-s3cr3t')).toBe('/srv/data [redacted]');
+
+				process.env.SERVE_TEST_DUCKDB_SECRET = 'new-s3cr3t';
+				await loadConnectionConfig(workDir);
+				expect(redactInterpolatedValues('old-s3cr3t new-s3cr3t')).toBe('old-s3cr3t [redacted]');
+			} finally {
+				delete process.env.SERVE_TEST_DUCKDB_SECRET;
+				delete process.env.SERVE_TEST_DUCKDB_DIR;
 			}
 		});
 
