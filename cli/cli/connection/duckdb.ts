@@ -37,7 +37,7 @@ import { getDuckDBToJsType } from '@evidence/core/connectors/duckdb/type-mapping
 import { escapeAnsiStringLiteral } from '@evidence/core/sql-dialect/common';
 import type { DuckDBCredentials } from '@evidence/core/connectors/duckdb/credentials';
 import type { Column } from '@evidence/core/user-components/interfaces/query-service';
-import type { QueryResult } from './types';
+import type { DuckDBConnectionConfig, QueryResult } from './types';
 import { redactInterpolatedValues } from './load-config';
 import { spawnForegroundChild } from '../server.shared.ts';
 
@@ -202,6 +202,21 @@ export class QueryRejectedError extends Error {
 	}
 }
 
+/**
+ * Matches by name and status rather than `instanceof`, so a refusal still
+ * keeps its status if the server bundle ever ends up with its own copy of this
+ * class.
+ */
+export function isQueryRejectedError(e: unknown): e is QueryRejectedError {
+	return (
+		e instanceof Error &&
+		e.name === 'QueryRejectedError' &&
+		typeof (e as { status?: unknown }).status === 'number'
+	);
+}
+
+type DuckDBConfig = Omit<DuckDBConnectionConfig, 'type'>;
+
 const DEFAULT_QUERY_TIMEOUT_SECONDS = 120;
 const DEFAULT_MAX_RESULT_ROWS = 100_000;
 const DEFAULT_THREADS = 4;
@@ -300,7 +315,7 @@ function registerShutdownHandler(): void {
 	process.once('SIGTERM', closeOnShutdown);
 }
 
-async function createInstance(config: DuckDBCredentials): Promise<DuckDBInstanceType> {
+async function createInstance(config: DuckDBConfig): Promise<DuckDBInstanceType> {
 	const { DuckDBInstance } = await loadDuckDBApi();
 	const instance = await DuckDBInstance.create(config.path);
 	const lock = shouldLock(config);
@@ -329,7 +344,7 @@ async function createInstance(config: DuckDBCredentials): Promise<DuckDBInstance
 				// apart — so in serve mode, where this error is cached and becomes
 				// every viewer's /api/query response, the detail only goes to the
 				// server log.
-				const detail = `setup_sql failed: ${redactInterpolatedValues((e as Error).message)}`;
+				const detail = `setup_sql failed: ${redactInterpolatedValues((e as Error).message, config.redactedValues ?? [])}`;
 				if (!process.env.EVIDENCE_SERVE) throw new Error(detail);
 				console.error(detail);
 				throw new Error('setup_sql failed (details in the server log)');
@@ -349,7 +364,7 @@ async function createInstance(config: DuckDBCredentials): Promise<DuckDBInstance
 	return instance;
 }
 
-async function getInstance(config: DuckDBCredentials): Promise<DuckDBInstanceType> {
+async function getInstance(config: DuckDBConfig): Promise<DuckDBInstanceType> {
 	const key = configKey(config);
 	if (cachedInstance?.key === key) return cachedInstance.instance;
 
@@ -406,6 +421,71 @@ async function isRefusedStatement(
 	}
 }
 
+// Whitespace and empty statements (`;`).
+function isBlank(ch: string | undefined): boolean {
+	return ch === ';' || (ch !== undefined && /\s/.test(ch));
+}
+
+// Hand-rolled rather than `/[\s;]+$/`: viewers control this text, and that
+// regex backtracks quadratically on a long run of whitespace.
+function trimTrailingBlanks(sql: string): string {
+	let end = sql.length;
+	while (end > 0 && isBlank(sql[end - 1])) end--;
+	return sql.slice(0, end);
+}
+
+/**
+ * Strips whitespace, empty statements and comments from both ends of `sql`.
+ * Each position is scanned a bounded number of times, so it stays linear on
+ * hostile input. Not string-literal aware (a `--` inside a quoted string on
+ * the last line reads as a comment), which can only make the wrapped text
+ * fail to parse — never change what runs.
+ */
+function trimStatement(sql: string): string {
+	let start = 0;
+	let end = sql.length;
+	while (start < end) {
+		if (isBlank(sql[start])) {
+			start++;
+		} else if (sql.startsWith('--', start)) {
+			const newline = sql.indexOf('\n', start);
+			start = newline === -1 ? end : newline + 1;
+		} else if (sql.startsWith('/*', start)) {
+			const close = sql.indexOf('*/', start + 2);
+			if (close === -1) break;
+			start = close + 2;
+		} else {
+			break;
+		}
+	}
+	// Once a backward search for `/*` fails, no earlier one exists either.
+	let openersLeft = true;
+	let scannedLine = -1;
+	while (end > start) {
+		if (isBlank(sql[end - 1])) {
+			end--;
+			continue;
+		}
+		if (openersLeft && end - start >= 4 && sql.startsWith('*/', end - 2)) {
+			const open = sql.lastIndexOf('/*', end - 3);
+			if (open >= start) {
+				end = open;
+				continue;
+			}
+			openersLeft = false;
+		}
+		// A line comment starts at the line's first `--`, so each line needs
+		// scanning only once.
+		const lineStart = Math.max(start, sql.lastIndexOf('\n', end - 1) + 1);
+		if (lineStart === scannedLine) break;
+		scannedLine = lineStart;
+		const dash = sql.indexOf('--', lineStart);
+		if (dash === -1 || dash >= end) break;
+		end = dash;
+	}
+	return sql.slice(start, end);
+}
+
 /**
  * Locked instances accept exactly one SELECT, run as
  * `FROM (<sql>) LIMIT <maxRows + 1>`. Defence in depth: the lock settings are
@@ -432,28 +512,32 @@ async function lockedQuerySql(
 	// and run as something other than what was sent.
 	if (sql.includes('\0')) throw rejected;
 	// Leading text on the same line keeps DuckDB's LINE numbers matching the
-	// viewer's SQL; the closing newline ends any trailing `--` comment.
-	const wrapped = `FROM (${sql.replace(/[\s;]+$/, '')}\n) LIMIT ${maxRows + 1}`;
-	let count: number;
-	try {
-		count = (await connection.extractStatements(wrapped)).count;
-	} catch {
-		// A syntax error in the SQL as sent is the viewer's to see; SQL that
-		// parses on its own but not as a subquery is a statement we refuse.
+	// viewer's SQL; the closing newline ends any trailing `--` comment. The
+	// comment-stripping second try is for `select 1; -- note` and `;select 1`.
+	for (const body of new Set([trimTrailingBlanks(sql), trimStatement(sql)])) {
+		const wrapped = `FROM (${body}\n) LIMIT ${maxRows + 1}`;
+		let count: number;
 		try {
-			await connection.extractStatements(sql);
-		} catch (e) {
-			throw new Error((e as Error).message.replace(/^Failed to extract statements: /, ''));
+			count = (await connection.extractStatements(wrapped)).count;
+		} catch {
+			continue;
 		}
-		throw rejected;
+		if (count !== 1) throw rejected;
+		return wrapped;
 	}
-	if (count !== 1) throw rejected;
-	return wrapped;
+	// A syntax error in the SQL as sent is the viewer's to see; SQL that parses
+	// on its own but not as a subquery is a statement we refuse.
+	try {
+		await connection.extractStatements(sql);
+	} catch (e) {
+		throw new Error((e as Error).message.replace(/^Failed to extract statements: /, ''));
+	}
+	throw rejected;
 }
 
 export async function executeDuckDBQuery(
 	sql: string,
-	config: DuckDBCredentials
+	config: DuckDBConfig
 ): Promise<QueryResult> {
 	await ensureDuckdbNativeAddonAvailable();
 
@@ -508,9 +592,14 @@ export async function executeDuckDBQuery(
 		return { rows, columns };
 	} catch (e) {
 		if (timedOut) throw new QueryRejectedError('Query timed out (query_timeout_seconds)', 504);
+		// The relabeling check below is itself two queries: keep the timer from
+		// interrupting them, and only run them for the bind error a wrapped
+		// non-SELECT produces.
+		clearTimeout(timer);
 		if (
 			wrapped &&
-			!(e instanceof QueryRejectedError) &&
+			e instanceof Error &&
+			/^Catalog Error: Table with name .+ does not exist/.test(e.message) &&
 			(await isRefusedStatement(connection, sql, wrapped))
 		) {
 			throw notSingleSelect();

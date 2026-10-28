@@ -49,7 +49,11 @@ export type MotherDuckConnectionConfig = { type: 'motherduck' } & MotherduckCred
 
 export type AthenaConnectionConfig = { type: 'athena' } & AthenaCredentials;
 
-export type DuckDBConnectionConfig = { type: 'duckdb' } & DuckDBCredentials;
+export type DuckDBConnectionConfig = {
+	type: 'duckdb';
+	/** `${VAR}` values interpolated into setup_sql, scrubbed from setup errors. */
+	redactedValues?: readonly string[];
+} & DuckDBCredentials;
 
 export type ConnectionConfig =
 	| SnowflakeConnectionConfig
