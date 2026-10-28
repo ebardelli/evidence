@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { executeDuckDBQuery, QueryRejectedError } from './duckdb';
+import { executeDuckDBQuery, isQueryRejectedError, QueryRejectedError } from './duckdb';
 import type { DuckDBCredentials } from '@evidence/core/connectors/duckdb/credentials';
 
 let allowedDir: string;
@@ -109,7 +109,12 @@ describe('locked DuckDB instance', () => {
 		'SUMMARIZE t',
 		'from t select n',
 		'select n from t;',
-		'select n from t -- trailing comment'
+		'select n from t -- trailing comment',
+		'select n from t; -- comment after the semicolon',
+		'select n from t; /* block */ ;',
+		';select n from t',
+		'/* lead */ -- line\nselect n from t;;\n-- c',
+		"select n, '--' as s from t"
 	])('runs %s', async (sql) => {
 		const result = await executeDuckDBQuery(sql, locked());
 		expect(result.rows.length).toBeGreaterThan(0);
@@ -118,6 +123,29 @@ describe('locked DuckDB instance', () => {
 	it('keeps the query’s own ORDER BY and LIMIT', async () => {
 		const result = await executeDuckDBQuery('select n from t order by n desc limit 3', locked());
 		expect(result.rows.map((r) => Number(r.n))).toEqual([9, 8, 7]);
+	});
+
+	it('keeps the ORDER BY with preserve_insertion_order off', async () => {
+		const config = locked({
+			setupSql: `-- order ${seq++}\nSET preserve_insertion_order = false;\nCREATE TABLE big AS SELECT range AS n FROM range(1000000);`,
+			threads: 8,
+			maxResultRows: 1_000_000
+		});
+		const result = await executeDuckDBQuery('select n from big order by n desc', config);
+		const ns = result.rows.map((r) => Number(r.n));
+		expect(ns.every((n, i) => i === 0 || ns[i - 1]! > n)).toBe(true);
+	});
+
+	it('stays fast on long runs of whitespace and empty statements', async () => {
+		const started = Date.now();
+		for (const sql of [
+			`select 1${' '.repeat(200_000)}x`,
+			`${';'.repeat(100_000)}select 1`,
+			`select 1 ${'*/ --x\n'.repeat(50_000)}x`
+		]) {
+			await executeDuckDBQuery(sql, locked()).catch(() => {});
+		}
+		expect(Date.now() - started).toBeLessThan(5_000);
 	});
 
 	it('reports a syntax error as the viewer’s error, not a refusal', async () => {
@@ -194,6 +222,12 @@ describe('locked DuckDB instance', () => {
 		} finally {
 			error.mockRestore();
 		}
+	});
+
+	it('recognises a QueryRejectedError by name and status, not instanceof', () => {
+		const foreign = Object.assign(new Error('x'), { name: 'QueryRejectedError', status: 400 });
+		expect(isQueryRejectedError(foreign)).toBe(true);
+		expect(isQueryRejectedError(Object.assign(new Error('x'), { status: 401 }))).toBe(false);
 	});
 
 	it('locks by default in serve mode', async () => {

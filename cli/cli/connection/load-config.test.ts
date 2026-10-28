@@ -291,7 +291,8 @@ describe('loadConnectionConfig', () => {
 				queryTimeoutSeconds: 120,
 				maxResultRows: 100000,
 				memoryLimit: undefined,
-				threads: undefined
+				threads: undefined,
+				redactedValues: []
 			});
 		});
 
@@ -361,26 +362,29 @@ describe('loadConnectionConfig', () => {
 				await writeYaml(
 					`type: duckdb\nsetup_sql: "CREATE SECRET (TYPE gcs, SECRET '\${SERVE_TEST_DUCKDB_SECRET}')"\n`
 				);
-				await loadConnectionConfig(workDir);
-				expect(redactInterpolatedValues("near 'gcs-hmac-s3cr3t')")).toBe("near '[redacted]')");
+				const cfg = await loadConnectionConfig(workDir);
+				const values = cfg?.type === 'duckdb' ? (cfg.redactedValues ?? []) : [];
+				expect(redactInterpolatedValues("near 'gcs-hmac-s3cr3t')", values)).toBe(
+					"near '[redacted]')"
+				);
 			} finally {
 				delete process.env.SERVE_TEST_DUCKDB_SECRET;
 			}
 		});
 
-		it('redacts only setup_sql values, and only from the latest load', async () => {
+		it('collects only setup_sql values, separately for each load', async () => {
 			process.env.SERVE_TEST_DUCKDB_SECRET = 'old-s3cr3t';
 			process.env.SERVE_TEST_DUCKDB_DIR = '/srv/data';
 			try {
 				await writeYaml(
 					`type: duckdb\npath: \${SERVE_TEST_DUCKDB_DIR}/db.duckdb\nsetup_sql: "SELECT '\${SERVE_TEST_DUCKDB_SECRET}'"\n`
 				);
-				await loadConnectionConfig(workDir);
-				expect(redactInterpolatedValues('/srv/data old-s3cr3t')).toBe('/srv/data [redacted]');
-
+				const first = await loadConnectionConfig(workDir);
 				process.env.SERVE_TEST_DUCKDB_SECRET = 'new-s3cr3t';
-				await loadConnectionConfig(workDir);
-				expect(redactInterpolatedValues('old-s3cr3t new-s3cr3t')).toBe('old-s3cr3t [redacted]');
+				const second = await loadConnectionConfig(workDir);
+				// A later load must not change what an earlier config redacts.
+				expect(first).toMatchObject({ redactedValues: ['old-s3cr3t'] });
+				expect(second).toMatchObject({ redactedValues: ['new-s3cr3t'] });
 			} finally {
 				delete process.env.SERVE_TEST_DUCKDB_SECRET;
 				delete process.env.SERVE_TEST_DUCKDB_DIR;

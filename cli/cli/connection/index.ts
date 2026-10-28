@@ -12,12 +12,12 @@ import { executeSqlServerQuery } from './sqlserver';
 import { executeDatabricksQuery } from './databricks';
 import { executePostgresQuery } from './postgres';
 import { executeMotherduckQuery } from './motherduck';
-import { executeDuckDBQuery, QueryRejectedError } from './duckdb';
+import { executeDuckDBQuery, isQueryRejectedError } from './duckdb';
 import { managedTableNamesSql } from '@evidence/core/metadata/managed-catalog';
 import type { ConnectionConfig, QueryResult } from './types';
 
 export type { ConnectionConfig, QueryResult, QueryColumn } from './types';
-export { loadConnectionConfig, QueryRejectedError };
+export { loadConnectionConfig, isQueryRejectedError };
 
 export async function executeQuery(sql: string, config: ConnectionConfig): Promise<QueryResult> {
 	switch (config.type) {

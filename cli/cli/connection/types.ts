@@ -42,7 +42,11 @@ export type CubeConnectionConfig = { type: 'cube' } & CubeCredentials;
 
 export type MotherDuckConnectionConfig = { type: 'motherduck' } & MotherduckCredentials;
 
-export type DuckDBConnectionConfig = { type: 'duckdb' } & DuckDBCredentials;
+export type DuckDBConnectionConfig = {
+	type: 'duckdb';
+	/** `${VAR}` values interpolated into setup_sql, scrubbed from setup errors. */
+	redactedValues?: readonly string[];
+} & DuckDBCredentials;
 
 export type ConnectionConfig =
 	| SnowflakeConnectionConfig
