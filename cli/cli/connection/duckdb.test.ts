@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -84,12 +84,46 @@ describe('locked DuckDB instance', () => {
 		'LOAD httpfs',
 		'CREATE TEMP TABLE x AS SELECT 1',
 		"CREATE SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')",
-		'select 1; select 2'
+		'select 1; select 2',
+		// The C API stops at a NUL, so this would otherwise run as `DROP TABLE t`.
+		'DROP TABLE t\0',
+		'select 1\0; DROP TABLE t',
+		// Closing the wrapper's parenthesis early to smuggle in a second statement.
+		'select 1); DROP TABLE t; select * from (select 1',
+		'EXPLAIN select 1'
 	])('rejects %s with 400', async (sql) => {
-		const e = await rejection(sql, locked());
+		const config = locked();
+		const e = await rejection(sql, config);
 		expect(e).toBeInstanceOf(QueryRejectedError);
 		expect((e as QueryRejectedError).status).toBe(400);
 		expect((e as Error).message).toBe('Only single SELECT statements are allowed');
+		const result = await executeDuckDBQuery('select count(*) as c from t', config);
+		expect(Number(result.rows[0]?.c)).toBe(10);
+	});
+
+	it.each([
+		'PIVOT t ON (n % 2) USING count(*)',
+		'from (PIVOT t ON (n % 2) USING count(*))',
+		'UNPIVOT (select 1 a, 2 b) ON a, b INTO NAME k VALUE v',
+		'DESCRIBE t',
+		'SUMMARIZE t',
+		'from t select n',
+		'select n from t;',
+		'select n from t -- trailing comment'
+	])('runs %s', async (sql) => {
+		const result = await executeDuckDBQuery(sql, locked());
+		expect(result.rows.length).toBeGreaterThan(0);
+	});
+
+	it('keeps the query’s own ORDER BY and LIMIT', async () => {
+		const result = await executeDuckDBQuery('select n from t order by n desc limit 3', locked());
+		expect(result.rows.map((r) => Number(r.n))).toEqual([9, 8, 7]);
+	});
+
+	it('reports a syntax error as the viewer’s error, not a refusal', async () => {
+		const e = await rejection('selec 1', locked());
+		expect(e).not.toBeInstanceOf(QueryRejectedError);
+		expect((e as Error).message).toMatch(/^Parser Error: syntax error at or near "selec"/);
 	});
 
 	it('loads the secret store before locking, so secret lookups still work', async () => {
@@ -145,6 +179,21 @@ describe('locked DuckDB instance', () => {
 		const config = locked({ setupSql: `-- broken ${seq++}\nTHIS IS NOT SQL` });
 		await expect(executeDuckDBQuery('select 1', config)).rejects.toThrow(/setup_sql failed/);
 		await expect(executeDuckDBQuery('select 1', config)).rejects.toThrow(/setup_sql failed/);
+	});
+
+	it('keeps setup_sql error detail out of query responses in serve mode', async () => {
+		process.env.EVIDENCE_SERVE = '1';
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const config = locked({
+				setupSql: `-- broken ${seq++}\nCREATE SECRET (TYPE gcs, KEY_ID 'id', SECRET 'literal-s3cr3t') oops`
+			});
+			const e = await rejection('select 1', config);
+			expect((e as Error).message).toBe('setup_sql failed (details in the server log)');
+			expect(String(error.mock.calls[0]?.[0])).toMatch(/^setup_sql failed: /);
+		} finally {
+			error.mockRestore();
+		}
 	});
 
 	it('locks by default in serve mode', async () => {
