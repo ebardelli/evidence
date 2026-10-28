@@ -13,14 +13,14 @@ import { executeDatabricksQuery } from './databricks';
 import { executePostgresQuery } from './postgres';
 import { executeMotherduckQuery } from './motherduck';
 import { executeAthenaQuery } from './athena';
-import { executeDuckDBQuery } from './duckdb';
+import { executeDuckDBQuery, QueryRejectedError } from './duckdb';
 import { managedTableNamesSql } from '@evidence/core/metadata/managed-catalog';
 import { escapeRedshiftStringLiteral } from '@evidence/core/sql-dialect/common';
 import type { ConnectionConfig, QueryResult } from './types';
 import type { WarehouseMode } from '@evidence/core/connectors/warehouse-mode';
 
 export type { ConnectionConfig, QueryResult, QueryColumn } from './types';
-export { loadConnectionConfig };
+export { loadConnectionConfig, QueryRejectedError };
 
 export async function executeQuery(sql: string, config: ConnectionConfig): Promise<QueryResult> {
 	switch (config.type) {

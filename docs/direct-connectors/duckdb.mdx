@@ -39,7 +39,7 @@ allowed_paths: ["gs://my-bucket/"]
   Lock the instance after `setup_sql` runs. Default: on in `evidence serve`, off in `evidence dev`.
 </ResponseField>
 <ResponseField name="query_timeout_seconds" type="number">
-  Interrupt a query on a locked instance after this many seconds (HTTP 504). Default: `120`.
+  Interrupt a query on a locked instance after this many seconds (HTTP 504). Default: `120`. Maximum: `2147483`.
 </ResponseField>
 <ResponseField name="max_result_rows" type="number">
   Reject a result with more rows than this on a locked instance (HTTP 413), rather than truncating it. Default: `100000`.
@@ -61,7 +61,7 @@ In `evidence serve`, report viewers reach DuckDB through the server's query endp
 - Extensions can no longer be installed or loaded, including auto-loading.
 - Settings are frozen (`lock_configuration`), so no `SET`, `RESET` or `PRAGMA` can undo the lock.
 - Secret values stay redacted.
-- Each request must be a single `SELECT`. Anything else gets HTTP 400 `Only single SELECT statements are allowed`.
+- Each request must be a single query: `SELECT`, `FROM`-first, `PIVOT`/`UNPIVOT`, `DESCRIBE`, `SHOW` or `SUMMARIZE`. Anything else gets HTTP 400 `Only single SELECT statements are allowed`. The query runs as `FROM (<query>) LIMIT <max_result_rows + 1>`, so DuckDB never builds a result larger than the cap.
 
 If any lock step fails, the instance is closed and every query errors. It never falls back to an unlocked instance.
 
@@ -71,4 +71,4 @@ A project that reads local files at query time must list their directories in `a
 
 Use `CREATE SECRET`, which keeps the secret in memory for the life of the process. `CREATE PERSISTENT SECRET` writes the secret in plaintext to `~/.duckdb/stored_secrets/` on the server's disk, where it outlives the process and can be read by anything with access to that directory.
 
-Keep secret values in environment variables and reference them as `${VAR}` in `setup_sql`. If setup fails, those values are redacted from the error message.
+Keep secret values in environment variables and reference them as `${VAR}` in `setup_sql`. If setup fails, those values are redacted from the error message. In `evidence serve`, viewers only see `setup_sql failed (details in the server log)`, and the redacted detail goes to the server log. `setup_sql_path` files aren't interpolated, so a secret written literally in one is only redacted from what viewers see, not from the log.
