@@ -2,7 +2,7 @@ name: CLI Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, static-export]
   pull_request:
   workflow_dispatch:
 
