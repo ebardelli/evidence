@@ -28,8 +28,17 @@ export interface StaticExportOptions {
 	concurrency?: number;
 }
 
-interface QueryManifestEntry {
+export interface QueryManifestEntry {
+	/** Path relative to the output root, e.g. `_evidence/data/orders.parquet` */
 	file: string;
+	/** Filter-stripped, whitespace-normalised SQL — used by WasmQueryService to
+	 *  match an incoming (filter-interpolated) SQL back to its Parquet file. */
+	normalizedSql: string;
+	/** The first FROM-clause table name for simple single-table queries.
+	 *  WasmQueryService registers the Parquet under this name so the original
+	 *  SQL (with filter values) can run unchanged against DuckDB-WASM.
+	 *  Null for joins / CTEs / subqueries where naive rewriting is unsafe. */
+	sourceTable: string | null;
 	columns: Array<{ name: string; type: string }>;
 	rowCount: number;
 }
@@ -43,6 +52,33 @@ interface ExtractedQuery {
 	name: string;
 	sql: string;
 	sourcePage: string;
+}
+
+// ---------------------------------------------------------------------------
+// SQL normalisation helpers (shared logic between build and runtime)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalise SQL for stable matching between build-time and runtime.
+ * Must produce the same output as the browser-side normaliseSql() in WasmQueryService.
+ */
+export function normaliseSql(sql: string): string {
+	return sql.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Extract the primary source table from a simple single-table query.
+ * Returns null for JOINs, CTEs, subqueries, or anything that can't be
+ * safely rewritten with a naive FROM-clause substitution.
+ */
+export function extractSourceTable(strippedSql: string): string | null {
+	// Reject joins, CTEs, subqueries
+	if (/\bjoin\b/i.test(strippedSql)) return null;
+	if (/\bwith\b\s+\w+\s+as\s*\(/i.test(strippedSql)) return null;
+	if (strippedSql.includes('(')) return null;
+
+	const match = strippedSql.match(/\bfrom\s+([a-zA-Z_]\w*)\b/i);
+	return match ? match[1] : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,13 +308,23 @@ export async function staticExport(options: StaticExportOptions = {}): Promise<v
 	// 4. Execute queries in parallel against warehouse
 	console.log('Executing queries...');
 	const queries = [...queryMap.values()];
-	const queryResults = new Map<string, QueryResultData>();
+
+	interface QueryRecord {
+		result: QueryResultData;
+		normalizedSql: string;
+		sourceTable: string | null;
+	}
+	const queryRecords = new Map<string, QueryRecord>();
 
 	const executionTasks = queries.map((q) => async () => {
 		const stripped = stripFilterConditions(q.sql);
 		process.stdout.write(`  ${pc.dim(q.name)} ... `);
 		const result = await executeQuery(stripped);
-		queryResults.set(q.name, result);
+		queryRecords.set(q.name, {
+			result,
+			normalizedSql: normaliseSql(stripped),
+			sourceTable: extractSourceTable(stripped)
+		});
 		console.log(pc.green(`✓`) + pc.dim(` ${result.rows.length} rows`));
 		return result;
 	});
@@ -296,7 +342,7 @@ export async function staticExport(options: StaticExportOptions = {}): Promise<v
 		}
 	}
 
-	if (queryResults.size === 0) {
+	if (queryRecords.size === 0) {
 		console.log(pc.red('\nAll queries failed. No files written.'));
 		process.exit(1);
 	}
@@ -323,19 +369,21 @@ export async function staticExport(options: StaticExportOptions = {}): Promise<v
 	};
 
 	try {
-		for (const [name, result] of queryResults) {
+		for (const [name, record] of queryRecords) {
 			const dataPath = `_evidence/data/${name}.parquet`;
 			const outputPath = join(outputBase, dataPath);
 			process.stdout.write(`  ${pc.dim(name)} ... `);
 			try {
-				await writeParquet(dbInstance, result.rows, outputPath);
+				await writeParquet(dbInstance, record.result.rows, outputPath);
 				manifest.queries[name] = {
 					file: dataPath,
-					columns: result.columns.map((c) => ({
+					normalizedSql: record.normalizedSql,
+					sourceTable: record.sourceTable,
+					columns: record.result.columns.map((c) => ({
 						name: c.name,
 						type: (c as { type?: string }).type ?? 'unknown'
 					})),
-					rowCount: result.rows.length
+					rowCount: record.result.rows.length
 				};
 				console.log(pc.green('✓'));
 			} catch (err) {
