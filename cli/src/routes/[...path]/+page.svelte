@@ -63,6 +63,7 @@
 				metricFiles={data.metricFiles}
 				{pageSettings}
 				projectSettings={data.projectSettings}
+				staticBase={data.staticBase ?? undefined}
 			>
 				<PeriodPicker class="mb-4" />
 				<div

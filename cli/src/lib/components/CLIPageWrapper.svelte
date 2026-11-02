@@ -23,6 +23,7 @@
 	} from '@evidence/core/metadata/inline-query-metadata.svelte';
 	import { createMetricsCatalogContext } from '@evidence/core/metrics/metrics-catalog';
 	import { CLIQueryService, type ConnectionType } from '$lib/services/CLIQueryService';
+	import { WasmQueryService } from '$lib/services/WasmQueryService';
 	import type { Snippet } from 'svelte';
 	import type { SerializedFilters } from '@evidence/core/Filters.svelte';
 
@@ -39,6 +40,9 @@
 		metricFiles?: Record<string, string>;
 		pageSettings?: PageSettings;
 		projectSettings?: ProjectSettings & { computedDefaultDateRangeEnd?: string };
+		/** Set by `evidence export`: run queries in the browser against the exported
+		 * Parquet files served under this URL prefix ('' for the site root). */
+		staticBase?: string;
 		children: Snippet;
 	}
 
@@ -54,6 +58,7 @@
 		metricFiles = {},
 		pageSettings = {},
 		projectSettings = { first_day_of_week: 'sunday' },
+		staticBase,
 		children
 	}: Props = $props();
 
@@ -69,17 +74,22 @@
 		form: null
 	});
 
-	// Show validation error overlays on components
-	setShowErrorsContext(true);
+	const isStatic = staticBase !== undefined;
+
+	// Show validation error overlays on components (not on a published static site)
+	setShowErrorsContext(!isStatic);
 
 	// Create and set QueryService with the right dialect for the active connection.
-	const queryService = new CLIQueryService(organizationId, connectionType);
+	const queryService = isStatic
+		? new WasmQueryService(staticBase)
+		: new CLIQueryService(organizationId, connectionType);
 	setQueryService(queryService);
 
 	// Set up metadata so components that introspect tables/columns work.
 	// connectionType values match WarehouseMode names 1:1; null → managed engine.
 	const metadata = new Metadata(queryService, {
-		warehouseMode: connectionType ?? 'managed',
+		// Static sites query DuckDB-WASM, which has MotherDuck's information_schema.
+		warehouseMode: isStatic ? 'motherduck' : (connectionType ?? 'managed'),
 		schemaAllowlist: () => schemaAllowlist
 	});
 	setMetadataContext(metadata);

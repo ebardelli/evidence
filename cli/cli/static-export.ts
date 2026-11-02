@@ -1,411 +1,312 @@
 /**
- * Static site export for Evidence CLI.
+ * Static site export (`evidence export`).
  *
- * Discovers all markdown pages, extracts named SQL queries (with filter
- * placeholders stripped), runs them against the warehouse, saves results as
- * Parquet files, and writes a manifest.json catalog. The output is consumed
- * by WasmQueryService in the browser — no server required.
+ * Produces a self-contained static site that runs without a server:
+ *  1. Every table in the project's DuckDB connection is copied to a Parquet
+ *     file under `_evidence/data/`, listed in `_evidence/manifest.json`.
+ *  2. Every page is rendered through the built SvelteKit app (in-process, like
+ *     `evidence validate`) with EVIDENCE_STATIC set, so the page runs its
+ *     queries in the browser with DuckDB-WASM (see WasmQueryService) against
+ *     those Parquet files. The page's SQL is unchanged: it still reads e.g.
+ *     `warehouse.orders`, which the browser recreates as views.
+ *  3. The app's client assets and the project's `static/` folder are copied.
+ *
+ * `--base /prefix` hosts the site under a sub-path (e.g. GitHub Pages project
+ * sites): asset URLs in the HTML are made absolute under the prefix, and a small
+ * script prefixes root-relative links (`/page`) that pages render at runtime.
  */
 
-import { mkdir, writeFile, unlink } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
-import { readdir, readFile } from 'node:fs/promises';
-import { loadProjectConfig } from './project-config/load-config.ts';
-import { executeQuery, type QueryResultData } from './query.ts';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import pc from 'picocolors';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import type { Server as ServerType, SSRManifest } from '@sveltejs/kit';
+import { loadProjectConfig } from './project-config/load-config.ts';
+import { executeQuery, loadConnectionConfig, type ConnectionConfig } from './connection/index.ts';
 
 export interface StaticExportOptions {
 	/** Path to the Evidence project root. Defaults to cwd. */
 	projectRoot?: string;
-	/** Directory to write Parquet files and manifest.json into. Defaults to ./dist. */
+	/** Directory to write the site into. Defaults to ./dist. */
 	outputDir?: string;
-	/** Maximum number of queries to execute concurrently. */
-	concurrency?: number;
+	/** URL prefix the site is hosted under, e.g. `/my-site`. Defaults to the site root. */
+	base?: string;
 }
 
-export interface QueryManifestEntry {
-	/** Path relative to the output root, e.g. `_evidence/data/orders.parquet` */
+/** Kept in sync with the manifest type WasmQueryService reads. */
+interface ManifestTable {
+	/** Attached database the table lives in; null for the connection's default database. */
+	catalog: string | null;
+	schema: string;
+	name: string;
+	/** Path relative to the site root. */
 	file: string;
-	/** Filter-stripped, whitespace-normalised SQL — used by WasmQueryService to
-	 *  match an incoming (filter-interpolated) SQL back to its Parquet file. */
-	normalizedSql: string;
-	/** The first FROM-clause table name for simple single-table queries.
-	 *  WasmQueryService registers the Parquet under this name so the original
-	 *  SQL (with filter values) can run unchanged against DuckDB-WASM.
-	 *  Null for joins / CTEs / subqueries where naive rewriting is unsafe. */
-	sourceTable: string | null;
-	columns: Array<{ name: string; type: string }>;
 	rowCount: number;
 }
 
-export interface StaticManifest {
-	generatedAt: string;
-	queries: Record<string, QueryManifestEntry>;
+function normalizeBase(base: string | undefined): string {
+	const trimmed = (base ?? '').trim().replace(/\/+$/, '');
+	if (!trimmed) return '';
+	return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
-interface ExtractedQuery {
-	name: string;
-	sql: string;
-	sourcePage: string;
+function quoteIdent(name: string): string {
+	return `"${name.replace(/"/g, '""')}"`;
 }
 
-// ---------------------------------------------------------------------------
-// SQL normalisation helpers (shared logic between build and runtime)
-// ---------------------------------------------------------------------------
-
-/**
- * Normalise SQL for stable matching between build-time and runtime.
- * Must produce the same output as the browser-side normaliseSql() in WasmQueryService.
- */
-export function normaliseSql(sql: string): string {
-	return sql.toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-/**
- * Extract the primary source table from a simple single-table query.
- * Returns null for JOINs, CTEs, subqueries, or anything that can't be
- * safely rewritten with a naive FROM-clause substitution.
- */
-export function extractSourceTable(strippedSql: string): string | null {
-	// Reject joins, CTEs, subqueries
-	if (/\bjoin\b/i.test(strippedSql)) return null;
-	if (/\bwith\b\s+\w+\s+as\s*\(/i.test(strippedSql)) return null;
-	if (strippedSql.includes('(')) return null;
-
-	const match = strippedSql.match(/\bfrom\s+([a-zA-Z_]\w*)\b/i);
-	return match ? match[1] : null;
+function sqlString(value: string): string {
+	return `'${value.replace(/'/g, "''")}'`;
 }
 
 // ---------------------------------------------------------------------------
-// SQL extraction from markdown
+// 1. Tables → Parquet
 // ---------------------------------------------------------------------------
 
-/**
- * Extract named ```sql fences from a markdown file.
- * Markdoc syntax: ```sql {name}\n{sql}\n```
- * Only fences with a name (the meta field after "sql ") are included —
- * anonymous sql blocks can't be mapped to a stable Parquet file name.
- */
-function extractSqlFences(markdown: string, slug: string): ExtractedQuery[] {
-	const queries: ExtractedQuery[] = [];
-	// Match ```sql name\n...content...\n``` (backtick fence, greedy content)
-	const FENCE_RE = /^```sql\s+(\S+)\s*\n([\s\S]*?)\n```/gm;
-	let match;
-	while ((match = FENCE_RE.exec(markdown)) !== null) {
-		const [, name, sql] = match;
-		if (name && sql.trim()) {
-			queries.push({ name, sql: sql.trim(), sourcePage: slug });
-		}
-	}
-	return queries;
-}
-
-/**
- * Strip filter conditions from SQL so the full unfiltered dataset is fetched.
- *
- * Evidence uses two filter syntaxes:
- *  - [[optional WHERE clause]]  →  removed entirely (the block is conditional)
- *  - {{filter_id}} or {{filter_id.value}}  →  replaced with NULL (bare refs)
- *
- * After removal we clean up orphaned SQL keywords that were connecting the
- * filter block to the rest of the query (e.g. `WHERE AND`, `AND AND`).
- *
- * The resulting SQL runs against the warehouse and its output is stored as
- * a Parquet file. At runtime, DuckDB-WASM re-runs the original SQL (with
- * live filter values) against the Parquet data.
- */
-function stripFilterConditions(sql: string): string {
-	// Remove [[...]] conditional blocks (may span multiple lines, lazy match)
-	let stripped = sql.replace(/\[\[[\s\S]*?\]\]/g, ' ');
-	// Replace remaining {{...}} placeholders with NULL
-	stripped = stripped.replace(/\{\{[^}]+\}\}/g, 'NULL');
-	// Collapse whitespace so keyword patterns below are reliable
-	stripped = stripped.replace(/\s+/g, ' ').trim();
-
-	// Clean up dangling SQL keywords left by block removal.
-	// Run repeatedly until stable (one pass may expose a new pattern).
-	let prev = '';
-	while (prev !== stripped) {
-		prev = stripped;
-		// WHERE followed immediately by AND/OR → WHERE (the block was the only condition)
-		stripped = stripped.replace(/\bWHERE\s+(AND|OR)\b/gi, 'WHERE');
-		// AND/OR followed by another AND/OR → keep the latter
-		stripped = stripped.replace(/\b(AND|OR)\s+(AND|OR)\b/gi, '$2');
-		// Trailing AND/OR before end of string or before a clause keyword
-		stripped = stripped.replace(/\b(AND|OR)\s*$/i, '');
-		stripped = stripped.replace(/\b(AND|OR)\s+(GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b/gi, '$2');
-		// Trailing WHERE with nothing after (end of clause)
-		stripped = stripped.replace(/\bWHERE\s*$/i, '');
-		// WHERE followed by GROUP BY / ORDER BY / LIMIT / HAVING (block was the only predicate)
-		stripped = stripped.replace(/\bWHERE\s+(GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b/gi, '$1');
-	}
-
-	return stripped.trim();
-}
-
-// ---------------------------------------------------------------------------
-// Page discovery (no SvelteKit / Vite deps)
-// ---------------------------------------------------------------------------
-
-async function discoverPages(
-	pagesDir: string
-): Promise<Array<{ slug: string; content: string }>> {
-	const pages: Array<{ slug: string; content: string }> = [];
-
-	async function walk(dir: string) {
-		let entries;
-		try {
-			entries = await readdir(dir, { withFileTypes: true });
-		} catch {
-			return;
-		}
-		for (const entry of entries) {
-			const full = join(dir, entry.name);
-			if (entry.isDirectory()) {
-				if (!entry.name.startsWith('.') && entry.name !== 'node_modules') {
-					await walk(full);
-				}
-			} else if (entry.isFile() && entry.name.endsWith('.md')) {
-				const content = await readFile(full, 'utf-8');
-				// slug is the path relative to pagesDir, without extension
-				const rel = full.slice(pagesDir.length + 1).replace(/\\/g, '/');
-				const slug = rel.replace(/\.md$/, '');
-				pages.push({ slug, content });
-			}
-		}
-	}
-
-	await walk(pagesDir);
-	return pages;
-}
-
-// ---------------------------------------------------------------------------
-// Parquet writing via DuckDB node API
-// ---------------------------------------------------------------------------
-
-/**
- * Write query result rows to a Parquet file using DuckDB.
- * Strategy: serialize rows as NDJSON to a temp file, then use DuckDB's
- * read_json_auto() to load and COPY TO parquet. This avoids manually
- * constructing a DuckDB schema from JS types.
- */
-async function writeParquet(
-	instance: import('@duckdb/node-api').DuckDBInstance,
-	rows: Record<string, unknown>[],
-	outputPath: string
-): Promise<void> {
-	if (rows.length === 0) {
-		// Can't infer a schema from zero rows — write an empty marker file.
-		// DuckDB-WASM will see zero rows when it queries this dataset.
-		await writeFile(outputPath.replace(/\.parquet$/, '.empty'), '');
-		return;
-	}
-
-	const tmp = join(
-		tmpdir(),
-		`evd-static-${Date.now()}-${Math.random().toString(36).slice(2)}.ndjson`
-	);
-	await writeFile(tmp, rows.map((r) => JSON.stringify(r)).join('\n'), 'utf-8');
-
-	const conn = await instance.connect();
-	try {
-		// DuckDB SQL needs forward-slash paths even on Windows
-		const src = tmp.replace(/\\/g, '/');
-		const dst = outputPath.replace(/\\/g, '/');
-		await conn.run(
-			`COPY (SELECT * FROM read_json_auto('${src}')) TO '${dst}' (FORMAT PARQUET, COMPRESSION ZSTD)`
+async function exportTables(
+	config: ConnectionConfig,
+	outputBase: string
+): Promise<ManifestTable[]> {
+	// The native `type: duckdb` connector comes from the duckdb-connection branch:
+	// exporting copies tables with DuckDB's own COPY into local Parquet files.
+	if ((config.type as string) !== 'duckdb') {
+		throw new Error(
+			`evidence export supports \`type: duckdb\` connections only (this project uses \`${config.type}\`).`
 		);
-	} finally {
-		conn.disconnectSync();
-		await unlink(tmp).catch(() => {});
 	}
+
+	const [{ db }] = (await executeQuery('SELECT current_database() AS db', config)).rows as {
+		db: string;
+	}[];
+	const { rows } = await executeQuery(
+		`SELECT table_catalog, table_schema, table_name
+		 FROM information_schema.tables
+		 WHERE table_catalog NOT IN ('system', 'temp')
+		   AND table_schema NOT IN ('information_schema', 'pg_catalog')
+		 ORDER BY 1, 2, 3`,
+		config
+	);
+
+	const tables: ManifestTable[] = [];
+	for (const row of rows as { table_catalog: string; table_schema: string; table_name: string }[]) {
+		const catalog = row.table_catalog === db ? null : row.table_catalog;
+		const parts = [catalog, row.table_schema, row.table_name].filter((p): p is string => !!p);
+		const file = `_evidence/data/${parts.join('/')}.parquet`;
+		const target = path.join(outputBase, file);
+		const qualified = [row.table_catalog, row.table_schema, row.table_name].map(quoteIdent).join('.');
+
+		process.stdout.write(`  ${pc.dim(parts.join('.'))} ... `);
+		await mkdir(path.dirname(target), { recursive: true });
+		await executeQuery(
+			`COPY (FROM ${qualified}) TO ${sqlString(target)} (FORMAT parquet, COMPRESSION zstd)`,
+			config
+		);
+		const [{ n }] = (await executeQuery(`SELECT count(*)::INTEGER AS n FROM ${qualified}`, config))
+			.rows as { n: number }[];
+		console.log(pc.green('✓') + pc.dim(` ${n.toLocaleString()} rows`));
+
+		tables.push({ catalog, schema: row.table_schema, name: row.table_name, file, rowCount: n });
+	}
+	return tables;
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency limiter
+// 2. Pages → HTML
 // ---------------------------------------------------------------------------
 
-async function runWithLimit<T>(
-	tasks: Array<() => Promise<T>>,
-	limit: number
-): Promise<Array<T | Error>> {
-	const results: Array<T | Error> = new Array(tasks.length);
-	let next = 0;
-
-	async function worker() {
-		while (next < tasks.length) {
-			const i = next++;
-			try {
-				results[i] = await tasks[i]();
-			} catch (err) {
-				results[i] = err instanceof Error ? err : new Error(String(err));
+/** URL slugs for every page under pagesDir ('' is the home page). */
+async function discoverPageSlugs(pagesDir: string): Promise<string[]> {
+	const slugs: string[] = [];
+	async function walk(dir: string) {
+		for (const entry of await readdir(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (!entry.name.startsWith('.') && entry.name !== 'node_modules') await walk(full);
+			} else if (entry.isFile() && entry.name.endsWith('.md')) {
+				// Single-tree projects keep partials next to pages, marked in frontmatter.
+				const head = (await readFile(full, 'utf-8')).slice(0, 2000);
+				if (/^---[\s\S]*?^type:\s*partial\s*$[\s\S]*?^---/m.test(head)) continue;
+				const rel = path.relative(pagesDir, full).split(path.sep).join('/').replace(/\.md$/, '');
+				if (rel === 'index') slugs.push('');
+				// The sidebar links a folder's index page as `/folder/index`; `/folder` works too.
+				else if (rel.endsWith('/index')) slugs.push(rel, rel.slice(0, -'/index'.length));
+				else slugs.push(rel);
 			}
 		}
 	}
+	await walk(pagesDir);
+	return [...new Set(slugs)].sort();
+}
 
-	await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
-	return results;
+/**
+ * Prefixes root-relative links with the site base at runtime: links rendered
+ * by components (sidebar, markdown, table link columns) are written as `/page`.
+ * Navigation is a full page load (data-sveltekit-reload) — there is no server
+ * to answer SvelteKit's client-side data requests.
+ */
+function baseLinkScript(base: string): string {
+	return `<script>(() => {
+	const base = ${JSON.stringify(base)};
+	const fix = (u) => typeof u === 'string' && u.startsWith('/') && !u.startsWith('//') && u !== base && !u.startsWith(base + '/') ? base + u : u;
+	const fixEl = (el) => { const href = el.getAttribute && el.getAttribute('href'); const fixed = fix(href); if (fixed !== href) el.setAttribute('href', fixed); };
+	const scan = (node) => { if (node.nodeType !== 1) return; fixEl(node); node.querySelectorAll('[href^="/"]').forEach(fixEl); };
+	new MutationObserver((mutations) => { for (const m of mutations) m.type === 'attributes' ? fixEl(m.target) : m.addedNodes.forEach(scan); })
+		.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['href'] });
+	// Content links rewrite their own href when clicked (to carry filter params),
+	// after the observer ran; re-apply the base once their handlers are done.
+	window.addEventListener('click', (e) => { const a = e.target instanceof Element && e.target.closest('a[href]'); if (a) fixEl(a); });
+	const open = window.open;
+	window.open = function (url, ...rest) { return open.call(this, typeof url === 'string' ? fix(url) : url, ...rest); };
+})();</script>`;
+}
+
+/** Make a page rendered at `http://localhost/<slug>` work from any URL under `base`. */
+export function rewriteHtml(html: string, base: string): string {
+	let out = html
+		// SvelteKit renders asset URLs relative to the request path (`./_app`, `../../_app`).
+		.replace(/(["'(])(?:\.\.?\/)+(_app\/)/g, `$1${base}/$2`)
+		// …and computes its base path at runtime from the same relative prefix.
+		.replace(
+			/new URL\("\.{1,2}(?:\/\.\.)*\/?", location\)\.pathname\.slice\(0, -1\)/g,
+			JSON.stringify(base)
+		)
+		// Full page loads for every link; no hover preloading of server data.
+		.replace(/data-sveltekit-preload-data="[^"]*"/, 'data-sveltekit-preload-data="off" data-sveltekit-reload');
+	if (base) {
+		out = out
+			.replace(/\b(href|src)="\/(?!\/)([^"]*)"/g, (match, attr, rest) =>
+				`/${rest}`.startsWith(`${base}/`) ? match : `${attr}="${base}/${rest}"`
+			)
+			.replace('</head>', `${baseLinkScript(base)}</head>`);
+	}
+	return out;
+}
+
+async function loadServer(): Promise<ServerType> {
+	if (path.basename(process.execPath).startsWith('bun')) {
+		throw new Error(
+			'evidence export needs the built app: run it from the compiled `evidence` binary.'
+		);
+	}
+	// @ts-expect-error - generated at build time
+	const manifest: SSRManifest = (await import('../manifest.js')).default;
+	const { Server } = (await import('../server/index.js')) as {
+		Server: new (manifest: SSRManifest) => ServerType;
+	};
+	const server = new Server(manifest);
+	await server.init({ env: Bun.env as Record<string, string> });
+	return server;
+}
+
+async function render(server: ServerType, pathname: string): Promise<Response> {
+	return server.respond(new Request(`http://localhost${pathname}`), {
+		getClientAddress: () => '127.0.0.1'
+	});
 }
 
 // ---------------------------------------------------------------------------
-// Main export
+// 3. Client assets
+// ---------------------------------------------------------------------------
+
+async function copyClientAssets(outputBase: string): Promise<number> {
+	// @ts-expect-error - generated at build time
+	const { assetMap } = (await import('./assets.generated.ts')) as {
+		assetMap: Map<string, { path: string; gzipped: boolean }>;
+	};
+	for (const [routePath, asset] of assetMap) {
+		let bytes = new Uint8Array(await Bun.file(asset.path).arrayBuffer());
+		if (asset.gzipped) bytes = Bun.gunzipSync(bytes);
+		const target = path.join(outputBase, routePath);
+		await mkdir(path.dirname(target), { recursive: true });
+		await writeFile(target, bytes);
+	}
+	return assetMap.size;
+}
+
+// ---------------------------------------------------------------------------
+// Main
 // ---------------------------------------------------------------------------
 
 export async function staticExport(options: StaticExportOptions = {}): Promise<void> {
-	const projectRoot = resolve(options.projectRoot ?? process.cwd());
-	const outputBase = resolve(options.outputDir ?? join(projectRoot, 'dist'));
-	const dataDir = join(outputBase, '_evidence', 'data');
-	const manifestPath = join(outputBase, '_evidence', 'manifest.json');
-	const concurrency = options.concurrency ?? 5;
+	const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
+	const outputBase = path.resolve(options.outputDir ?? path.join(projectRoot, 'dist'));
+	const base = normalizeBase(options.base);
 
 	console.log(pc.bold('\nEvidence Static Export'));
 	console.log(pc.dim(`  Project: ${projectRoot}`));
 	console.log(pc.dim(`  Output:  ${outputBase}`));
+	console.log(pc.dim(`  Base:    ${base || '/'}`));
 	console.log('');
 
-	// 1. Load project config (pagesDir, etc.)
 	const config = await loadProjectConfig(projectRoot);
-
-	// 2. Discover all pages
-	const pages = await discoverPages(config.pagesDir);
-	if (pages.length === 0) {
-		console.log(pc.yellow('No markdown pages found in project.'));
-		return;
-	}
-	console.log(`  ${pc.dim('pages:')} ${pages.length}`);
-
-	// 3. Extract SQL queries from all pages (deduplicated by name)
-	const queryMap = new Map<string, ExtractedQuery>();
-	for (const page of pages) {
-		for (const q of extractSqlFences(page.content, page.slug)) {
-			if (!queryMap.has(q.name)) {
-				queryMap.set(q.name, q);
-			} else {
-				const existing = queryMap.get(q.name)!;
-				if (existing.sourcePage !== page.slug) {
-					console.warn(
-						pc.yellow(
-							`  ⚠ Query "${q.name}" in ${page.slug} shadows definition from ${existing.sourcePage}`
-						)
-					);
-				}
-			}
-		}
-	}
-
-	if (queryMap.size === 0) {
-		console.log(pc.yellow('No named SQL queries found in pages (```sql name blocks).'));
-		return;
-	}
-	console.log(`  ${pc.dim('queries:')} ${queryMap.size}`);
-	console.log('');
-
-	// 4. Execute queries in parallel against warehouse
-	console.log('Executing queries...');
-	const queries = [...queryMap.values()];
-
-	interface QueryRecord {
-		result: QueryResultData;
-		normalizedSql: string;
-		sourceTable: string | null;
-	}
-	const queryRecords = new Map<string, QueryRecord>();
-
-	const executionTasks = queries.map((q) => async () => {
-		const stripped = stripFilterConditions(q.sql);
-		process.stdout.write(`  ${pc.dim(q.name)} ... `);
-		const result = await executeQuery(stripped);
-		queryRecords.set(q.name, {
-			result,
-			normalizedSql: normaliseSql(stripped),
-			sourceTable: extractSourceTable(stripped)
-		});
-		console.log(pc.green(`✓`) + pc.dim(` ${result.rows.length} rows`));
-		return result;
-	});
-
-	const execResults = await runWithLimit(executionTasks, concurrency);
-
-	const failedQueries = queries.filter((_, i) => execResults[i] instanceof Error);
-	if (failedQueries.length > 0) {
-		console.log('');
-		for (const [i, q] of queries.entries()) {
-			const r = execResults[i];
-			if (r instanceof Error) {
-				console.log(`  ${pc.red('✗')} ${q.name}: ${r.message}`);
-			}
-		}
-	}
-
-	if (queryRecords.size === 0) {
-		console.log(pc.red('\nAll queries failed. No files written.'));
+	const connection = await loadConnectionConfig(projectRoot);
+	if (!connection) {
+		console.error(pc.red('evidence export needs a connection.yaml in the project root.'));
 		process.exit(1);
 	}
 
-	// 5. Write Parquet files using DuckDB
-	console.log('\nWriting Parquet files...');
-	await mkdir(dataDir, { recursive: true });
+	// Regenerated output only; anything else in the output dir is left alone.
+	await rm(path.join(outputBase, '_app'), { recursive: true, force: true });
+	await rm(path.join(outputBase, '_evidence'), { recursive: true, force: true });
+	await mkdir(outputBase, { recursive: true });
 
-	let duckdb: typeof import('@duckdb/node-api');
-	try {
-		duckdb = await import('@duckdb/node-api');
-	} catch {
-		console.error(
-			pc.red('\nError: @duckdb/node-api is required for Parquet export.') +
-				'\nInstall it with: pnpm add @duckdb/node-api'
+	console.log('Exporting tables...');
+	const tables = await exportTables(connection, outputBase);
+	await writeFile(
+		path.join(outputBase, '_evidence', 'manifest.json'),
+		JSON.stringify({ generatedAt: new Date().toISOString(), tables }, null, 2)
+	);
+
+	console.log('\nRendering pages...');
+	// Read by the app's routes (lib/server/serve-mode.ts) when rendering below.
+	// Set after exporting tables: serve mode locks the DuckDB connection.
+	process.env.EVIDENCE_PROJECT_CWD = projectRoot;
+	process.env.EVIDENCE_SERVE = '1';
+	process.env.EVIDENCE_STATIC = '1';
+	process.env.EVIDENCE_STATIC_BASE = base;
+	const server = await loadServer();
+
+	const slugs = await discoverPageSlugs(config.pagesDir);
+	let failures = 0;
+	for (const slug of slugs) {
+		process.stdout.write(`  ${pc.dim('/' + slug)} ... `);
+		const response = await render(server, `/${slug}`);
+		if (!response.ok) {
+			failures++;
+			console.log(pc.red(`✗ ${response.status}`));
+			continue;
+		}
+		const target = path.join(outputBase, slug, 'index.html');
+		await mkdir(path.dirname(target), { recursive: true });
+		await writeFile(target, rewriteHtml(await response.text(), base));
+		console.log(pc.green('✓'));
+	}
+
+	// Not-found page (GitHub Pages and most static hosts serve /404.html).
+	const notFound = await render(server, '/__evidence_not_found__');
+	await writeFile(path.join(outputBase, '404.html'), rewriteHtml(await notFound.text(), base));
+
+	// Project favicon (`favicon:` in evidence.config.yaml) is served by a route.
+	const favicon = await render(server, '/__evidence/favicon');
+	if (favicon.ok) {
+		await mkdir(path.join(outputBase, '__evidence'), { recursive: true });
+		await writeFile(
+			path.join(outputBase, '__evidence', 'favicon'),
+			new Uint8Array(await favicon.arrayBuffer())
 		);
-		process.exit(1);
 	}
 
-	const dbInstance = await duckdb.DuckDBInstance.create(':memory:');
-	const manifest: StaticManifest = {
-		generatedAt: new Date().toISOString(),
-		queries: {}
-	};
+	console.log('\nCopying assets...');
+	const assetCount = await copyClientAssets(outputBase);
+	const staticDir = path.join(projectRoot, 'static');
+	if (existsSync(staticDir)) await cp(staticDir, outputBase, { recursive: true });
+	// Keep GitHub Pages' Jekyll from dropping `_app/` and `_evidence/`.
+	await writeFile(path.join(outputBase, '.nojekyll'), '');
 
-	try {
-		for (const [name, record] of queryRecords) {
-			const dataPath = `_evidence/data/${name}.parquet`;
-			const outputPath = join(outputBase, dataPath);
-			process.stdout.write(`  ${pc.dim(name)} ... `);
-			try {
-				await writeParquet(dbInstance, record.result.rows, outputPath);
-				manifest.queries[name] = {
-					file: dataPath,
-					normalizedSql: record.normalizedSql,
-					sourceTable: record.sourceTable,
-					columns: record.result.columns.map((c) => ({
-						name: c.name,
-						type: (c as { type?: string }).type ?? 'unknown'
-					})),
-					rowCount: record.result.rows.length
-				};
-				console.log(pc.green('✓'));
-			} catch (err) {
-				console.log(pc.red(`✗ ${err instanceof Error ? err.message : err}`));
-			}
-		}
-	} finally {
-		dbInstance.closeSync();
-	}
-
-	// 6. Write manifest
-	await mkdir(join(outputBase, '_evidence'), { recursive: true });
-	await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-
-	// 7. Summary
-	const successCount = Object.keys(manifest.queries).length;
-	const failCount = queryMap.size - successCount;
 	console.log('');
 	console.log(pc.bold('Done.'));
-	console.log(`  ${pc.green(`${successCount} quer${successCount === 1 ? 'y' : 'ies'} exported`)}`);
-	if (failCount > 0) {
-		console.log(`  ${pc.red(`${failCount} failed`)}`);
+	console.log(`  ${tables.length} tables, ${slugs.length - failures} pages, ${assetCount} app assets`);
+	if (failures > 0) {
+		console.log(pc.red(`  ${failures} pages failed to render`));
+		process.exit(1);
 	}
-	console.log(`  ${pc.dim('manifest:')} ${manifestPath}`);
 }

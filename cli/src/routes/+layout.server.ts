@@ -9,7 +9,7 @@ import type { LayoutServerLoad } from './$types';
 import { getNavItems } from '$lib/markdown/files.server';
 import { loadCredentials } from '$lib/auth/credentials.server';
 import { getProjectCwd } from '$lib/server/project-cwd';
-import { isServeMode } from '$lib/server/serve-mode';
+import { isServeMode, staticBase } from '$lib/server/serve-mode';
 import { connectionYamlHint, resolveConnection } from '$lib/server/run-query';
 import {
 	getProxyUser,
@@ -185,6 +185,8 @@ export const load: LayoutServerLoad = async ({ url, cookies, request }) => {
 		hasLocalConnection,
 		connectionError,
 		connectionHint,
-		isServe
+		isServe,
+		// URL prefix of a static export (`evidence export`); null when served live.
+		staticBase: staticBase()
 	};
 };

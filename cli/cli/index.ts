@@ -347,7 +347,7 @@ try {
 			await staticExport({
 				projectRoot: process.cwd(),
 				outputDir: args.exportOutputDir ?? undefined,
-				concurrency: args.exportConcurrency ?? undefined
+				base: args.exportBase ?? undefined
 			});
 			process.exit(0);
 			break;
