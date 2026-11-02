@@ -31,7 +31,7 @@ Deploy
   link        Attach this repo to an existing Studio project
   unlink      Disconnect this repo from its Studio project
   serve       Self-host the project (production server; needs connection.yaml)
-  export      Pre-build all queries as Parquet files for static hosting
+  export      Build a static site (HTML + Parquet) for static hosting
 
 Data
   query       Run a SQL query against the warehouse
@@ -172,8 +172,8 @@ export interface ParsedArgs {
 	telemetrySubcommand: TelemetrySubcommand | null;
 	/** Output directory for `export` (--output-dir); null = ./dist */
 	exportOutputDir: string | null;
-	/** Max concurrent queries for `export` (--concurrency); null = 5 */
-	exportConcurrency: number | null;
+	/** URL prefix the static site is hosted under, for `export` (--base); null = site root */
+	exportBase: string | null;
 }
 
 /** Flags that consume the following token as their value. */
@@ -195,7 +195,7 @@ const VALUE_FLAGS = new Set([
 	'--root-directory',
 	'--project',
 	'--output-dir',
-	'--concurrency'
+	'--base'
 ]);
 
 /** Boolean flags (no value). */
@@ -330,7 +330,7 @@ export function parseArgs(): ParsedArgs {
 		host: null,
 		telemetrySubcommand: null,
 		exportOutputDir: null,
-		exportConcurrency: null
+		exportBase: null
 	} satisfies Omit<ParsedArgs, 'command'>;
 
 	// Check for help/version flags first. Note: `-v` now means `--verbose`
@@ -632,19 +632,16 @@ export function parseArgs(): ParsedArgs {
 		lineageArgs = remaining.filter((a, i) => !a.startsWith('-') && i !== branchValueIdx);
 	}
 
-	// --output-dir <path> and --concurrency <n> for the export command
+	// --output-dir <path> and --base <prefix> for the export command
 	let exportOutputDir: string | null = null;
-	let exportConcurrency: number | null = null;
+	let exportBase: string | null = null;
 	if (command === 'export') {
 		const outDirIdx = args.findIndex((a) => a === '--output-dir');
 		if (outDirIdx !== -1 && args[outDirIdx + 1] && !args[outDirIdx + 1].startsWith('-')) {
 			exportOutputDir = args[outDirIdx + 1];
 		}
-		const concIdx = args.findIndex((a) => a === '--concurrency');
-		if (concIdx !== -1 && args[concIdx + 1]) {
-			const parsed = parseInt(args[concIdx + 1], 10);
-			if (!isNaN(parsed) && parsed > 0) exportConcurrency = parsed;
-		}
+		const baseIdx = args.findIndex((a) => a === '--base');
+		if (baseIdx !== -1 && args[baseIdx + 1]) exportBase = args[baseIdx + 1];
 	}
 
 	return {
@@ -674,7 +671,7 @@ export function parseArgs(): ParsedArgs {
 		host,
 		telemetrySubcommand,
 		exportOutputDir,
-		exportConcurrency
+		exportBase
 	};
 }
 

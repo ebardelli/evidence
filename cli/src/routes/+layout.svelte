@@ -66,6 +66,15 @@
 	const fs = createFullscreen();
 
 	const navTree = $derived(buildNavTreeFromFlat(data.navItems));
+	// Nav hrefs are root-relative (`/page`); a static export is served under its
+	// base path, with directory-style URLs (`/base/page/`).
+	const navPath = $derived.by(() => {
+		let pathname: string = page.url.pathname;
+		if (data.staticBase && pathname.startsWith(data.staticBase)) {
+			pathname = pathname.slice(data.staticBase.length) || '/';
+		}
+		return pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname;
+	});
 
 	// Dev poll: user content is read at runtime, not in Vite's module graph, so HMR can't see it.
 	// Serve mode ships immutable content (restart to refresh), so no poll.
@@ -229,13 +238,15 @@
 												</Sidebar.MenuButton>
 											</Sidebar.MenuItem>
 										{/if}
-										<PageNavTree tree={navTree} currentPath={page.url.pathname} />
+										<PageNavTree tree={navTree} currentPath={navPath} />
 									</Sidebar.Group>
 								{/if}
 							</Sidebar.Menu>
 						</Sidebar.GroupContent>
 					</Sidebar.Group>
 				</Sidebar.Content>
+				<!-- A static export has no user session or organization to show. -->
+				{#if data.staticBase == null}
 				<Sidebar.Footer class="flex flex-col gap-2">
 					<Sidebar.Menu>
 						<Sidebar.MenuItem>
@@ -337,6 +348,7 @@
 						</Sidebar.MenuItem>
 					</Sidebar.Menu>
 				</Sidebar.Footer>
+				{/if}
 			</Sidebar.Root>
 			<Sidebar.Inset class="flex flex-col">
 				<header
