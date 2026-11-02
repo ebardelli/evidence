@@ -30,6 +30,7 @@ Most pages only need a `title`. Add other keys to override a setting for that pa
 | `auto_refresh` | number (ms) | Override how often the page re-runs its queries. `0` disables it. |
 | `down_is_good` | boolean | Treat decreases as good for every delta on the page (`big_value`, `delta`, table delta columns). A component's own `down_is_good` overrides it. Page-only. |
 | `sidebar_position` | number | Order the page within its sidebar group (lower numbers first). Page-only — not a project default. |
+| `sidebar_label` | string | The page's name in the sidebar, overriding `title`. On a folder's `index.md` it names the folder, whose heading links to that page. Page-only. |
 | `icon` | string | The icon shown next to the page in the sidebar. Page-only. |
 | `theme` | object | Per-page [theme](/features/themes) overrides (colors, palettes, scales). See below. |
 | `downloads` | boolean \| object | Show or hide the download options in the published page menu. See [`downloads`](#downloads) below. |
@@ -40,7 +41,7 @@ Most pages only need a `title`. Add other keys to override a setting for that pa
 
 The layout keys (`page_width`, `cards`, `table_of_contents`, `auto_refresh`) override the project's `layout` in [`evidence.config.yaml`](/features/project-settings) for that page.
 
-`down_is_good`, `sidebar_position` and `icon` are page-only settings; they have no project-wide default.
+`down_is_good`, `sidebar_position`, `sidebar_label` and `icon` are page-only settings; they have no project-wide default.
 
 ### `theme`
 
