@@ -326,6 +326,17 @@ try {
 			await validate({ output: args.output, path: args.validatePath ?? undefined });
 			break;
 
+		case 'export': {
+			const { staticExport } = await import('./static-export.ts');
+			await staticExport({
+				projectRoot: process.cwd(),
+				outputDir: args.exportOutputDir ?? undefined,
+				concurrency: args.exportConcurrency ?? undefined
+			});
+			process.exit(0);
+			break;
+		}
+
 		case 'migrate':
 			await migrate({
 				output: args.output,
