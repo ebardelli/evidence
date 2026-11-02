@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadConnectionConfig } from './load-config.ts';
+import { loadConnectionConfig, redactInterpolatedValues } from './load-config.ts';
 
 let workDir: string;
 
@@ -300,6 +300,66 @@ describe('loadConnectionConfig', () => {
 		});
 	});
 
+	describe('duckdb', () => {
+		it('defaults to an in-memory database with no setup script', async () => {
+			await writeYaml(`type: duckdb\n`);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toEqual({
+				type: 'duckdb',
+				path: ':memory:',
+				schemas: [],
+				setupSql: undefined,
+				allowedPaths: [],
+				lock: undefined,
+				queryTimeoutSeconds: 120,
+				maxResultRows: 100000,
+				memoryLimit: undefined,
+				threads: undefined,
+				redactedValues: []
+			});
+		});
+
+		it('resolves local allowed_paths relative to cwd and keeps remote prefixes', async () => {
+			await writeYaml(
+				`type: duckdb\nallowed_paths: ["./data", "/abs/dir", "gs://bucket/"]\nlock: true\n`
+			);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toMatchObject({
+				type: 'duckdb',
+				allowedPaths: [path.join(workDir, 'data'), '/abs/dir', 'gs://bucket/'],
+				lock: true
+			});
+		});
+
+		it('rejects a non-positive max_result_rows', async () => {
+			await writeYaml(`type: duckdb\nmax_result_rows: 0\n`);
+			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/max_result_rows/);
+		});
+
+		it('parses an inline setup_sql', async () => {
+			await writeYaml(`type: duckdb\nsetup_sql: "INSTALL httpfs;"\n`);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toMatchObject({ type: 'duckdb', setupSql: 'INSTALL httpfs;' });
+		});
+
+		it('resolves setup_sql_path relative to cwd', async () => {
+			await writeFile(path.join(workDir, 'setup.sql'), 'INSTALL httpfs;\nLOAD httpfs;');
+			await writeYaml(`type: duckdb\nsetup_sql_path: ./setup.sql\n`);
+			const cfg = await loadConnectionConfig(workDir);
+			expect(cfg).toMatchObject({ type: 'duckdb', setupSql: 'INSTALL httpfs;\nLOAD httpfs;' });
+		});
+
+		it('rejects a query_timeout_seconds past what setTimeout can hold', async () => {
+			await writeYaml(`type: duckdb\nquery_timeout_seconds: 10000000\n`);
+			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/query_timeout_seconds/);
+		});
+
+		it('rejects both setup_sql and setup_sql_path', async () => {
+			await writeYaml(`type: duckdb\nsetup_sql: "INSTALL httpfs;"\nsetup_sql_path: ./setup.sql\n`);
+			await expect(loadConnectionConfig(workDir)).rejects.toThrow(/Provide only one of/);
+		});
+	});
+
 	it('rejects unknown type', async () => {
 		await writeYaml(`type: teradata\n`);
 		await expect(loadConnectionConfig(workDir)).rejects.toThrow(/unsupported type/);
@@ -316,6 +376,41 @@ describe('loadConnectionConfig', () => {
 				expect(cfg).toMatchObject({ type: 'clickhouse', password: 'hunter2' });
 			} finally {
 				delete process.env.SERVE_TEST_CH_PASSWORD;
+			}
+		});
+
+		it('redacts interpolated values from error messages', async () => {
+			process.env.SERVE_TEST_DUCKDB_SECRET = 'gcs-hmac-s3cr3t';
+			try {
+				await writeYaml(
+					`type: duckdb\nsetup_sql: "CREATE SECRET (TYPE gcs, SECRET '\${SERVE_TEST_DUCKDB_SECRET}')"\n`
+				);
+				const cfg = await loadConnectionConfig(workDir);
+				const values = cfg?.type === 'duckdb' ? (cfg.redactedValues ?? []) : [];
+				expect(redactInterpolatedValues("near 'gcs-hmac-s3cr3t')", values)).toBe(
+					"near '[redacted]')"
+				);
+			} finally {
+				delete process.env.SERVE_TEST_DUCKDB_SECRET;
+			}
+		});
+
+		it('collects only setup_sql values, separately for each load', async () => {
+			process.env.SERVE_TEST_DUCKDB_SECRET = 'old-s3cr3t';
+			process.env.SERVE_TEST_DUCKDB_DIR = '/srv/data';
+			try {
+				await writeYaml(
+					`type: duckdb\npath: \${SERVE_TEST_DUCKDB_DIR}/db.duckdb\nsetup_sql: "SELECT '\${SERVE_TEST_DUCKDB_SECRET}'"\n`
+				);
+				const first = await loadConnectionConfig(workDir);
+				process.env.SERVE_TEST_DUCKDB_SECRET = 'new-s3cr3t';
+				const second = await loadConnectionConfig(workDir);
+				// A later load must not change what an earlier config redacts.
+				expect(first).toMatchObject({ redactedValues: ['old-s3cr3t'] });
+				expect(second).toMatchObject({ redactedValues: ['new-s3cr3t'] });
+			} finally {
+				delete process.env.SERVE_TEST_DUCKDB_SECRET;
+				delete process.env.SERVE_TEST_DUCKDB_DIR;
 			}
 		});
 

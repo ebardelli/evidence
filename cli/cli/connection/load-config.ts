@@ -23,7 +23,8 @@ import {
 	redshiftConnectionSchema,
 	motherduckConnectionSchema,
 	snowflakeConnectionSchema,
-	sqlserverConnectionSchema
+	sqlserverConnectionSchema,
+	duckdbConnectionSchema,
 } from '@evidence/core/connectors/connection-schema';
 import { resolveSnowflakeCredentials } from '@evidence/core/connectors/snowflake/resolve';
 import { resolveBigQueryCredentials } from '@evidence/core/connectors/bigquery/resolve';
@@ -35,6 +36,7 @@ import { resolvePostgresCredentials } from '@evidence/core/connectors/postgres/r
 import { resolveCubeCredentials } from '@evidence/core/connectors/cube/resolve';
 import { resolveRedshiftCredentials } from '@evidence/core/connectors/redshift/resolve';
 import { resolveMotherduckCredentials } from '@evidence/core/connectors/motherduck/resolve';
+import { resolveDuckDBCredentials } from '@evidence/core/connectors/duckdb/resolve';
 import type { ConnectionConfig } from './types';
 
 const CONFIG_FILENAME = 'connection.yaml';
@@ -47,7 +49,25 @@ const CONFIG_FILENAME = 'connection.yaml';
 // name position is left untouched.
 const ENV_PATTERN = /\$\{([A-Z][A-Z0-9_]*)\}/g;
 
-function interpolateValue(value: unknown): unknown {
+// `${VAR}` values substituted inside setup_sql are collected per load and
+// carried on the duckdb config (redactedValues), so an error that echoes
+// setup_sql back (a DuckDB parser error quoting the failing statement) can be
+// scrubbed with exactly that config's values — see redactInterpolatedValues.
+// Only setup_sql: redacting e.g. a `${DATA_DIR}` path would garble messages
+// without hiding anything secret.
+const REDACTED_KEY = 'setup_sql';
+
+/** Replaces each of `values` in `message` with `[redacted]`. */
+export function redactInterpolatedValues(message: string, values: readonly string[]): string {
+	let redacted = message;
+	// Longest first, so a value that contains another is replaced whole.
+	for (const value of [...values].sort((a, b) => b.length - a.length)) {
+		redacted = redacted.replaceAll(value, '[redacted]');
+	}
+	return redacted;
+}
+
+function interpolateValue(value: unknown, secrets: Set<string>, redact = false): unknown {
 	if (typeof value === 'string') {
 		return value.replace(ENV_PATTERN, (match, name: string) => {
 			const envValue = process.env[name];
@@ -56,13 +76,18 @@ function interpolateValue(value: unknown): unknown {
 					`${CONFIG_FILENAME}: ${match} references unset environment variable ${name}`
 				);
 			}
+			// Skip trivially short values — redacting e.g. "1" would mangle messages.
+			if (redact && envValue.length >= 4) secrets.add(envValue);
 			return envValue;
 		});
 	}
-	if (Array.isArray(value)) return value.map(interpolateValue);
+	if (Array.isArray(value)) return value.map((v) => interpolateValue(v, secrets, redact));
 	if (value !== null && typeof value === 'object') {
 		return Object.fromEntries(
-			Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, interpolateValue(v)])
+			Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+				k,
+				interpolateValue(v, secrets, redact || k === REDACTED_KEY)
+			])
 		);
 	}
 	return value;
@@ -80,8 +105,9 @@ export async function loadConnectionConfig(cwd: string): Promise<ConnectionConfi
 	}
 
 	let parsed: unknown;
+	const setupSqlSecrets = new Set<string>();
 	try {
-		parsed = interpolateValue(yaml.load(raw));
+		parsed = interpolateValue(yaml.load(raw), setupSqlSecrets);
 	} catch (e) {
 		if (e instanceof Error && e.message.startsWith(CONFIG_FILENAME)) throw e;
 		throw new Error(`Failed to parse ${CONFIG_FILENAME}: ${(e as Error).message}`);
@@ -185,6 +211,12 @@ export async function loadConnectionConfig(cwd: string): Promise<ConnectionConfi
 		const data = parseOrThrow(motherduckConnectionSchema, obj);
 		const credentials = await resolveMotherduckCredentials(data, { cwd });
 		return { type: 'motherduck', ...credentials };
+	}
+
+	if (obj.type === 'duckdb') {
+		const data = parseOrThrow(duckdbConnectionSchema, obj);
+		const credentials = await resolveDuckDBCredentials(data, { cwd });
+		return { type: 'duckdb', ...credentials, redactedValues: [...setupSqlSecrets] };
 	}
 
 	throw new Error(

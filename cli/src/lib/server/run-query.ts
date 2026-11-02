@@ -16,7 +16,11 @@ import {
 	ensureSessionResolved,
 	clearSessionCache
 } from '$lib/auth/credentials.server';
-import { loadConnectionConfig, executeQuery as executeDirectQuery } from '$cli/connection';
+import {
+	loadConnectionConfig,
+	executeQuery as executeDirectQuery,
+	isQueryRejectedError
+} from '$cli/connection';
 import { schemaAllowlist } from '@evidence/core/connectors/schema-allowlist';
 import { getProjectCwd } from '$lib/server/project-cwd';
 import {
@@ -111,7 +115,10 @@ export async function runQuery(sql: string): Promise<RunQueryResult> {
 				rows: [],
 				columns: [],
 				error: e instanceof Error ? e.message : 'Query execution failed',
-				status: 500
+				// Only a deliberate refusal (duckdb.ts's 400/413/504) sets the
+				// status — other drivers' `status` fields (e.g. BigQuery's 401/403
+				// from its own auth) would read as the viewer's auth failing.
+				status: isQueryRejectedError(e) ? e.status : 500
 			};
 		}
 	}
