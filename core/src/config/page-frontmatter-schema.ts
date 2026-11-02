@@ -155,6 +155,13 @@ export const projectRootPageFrontmatterSchema = z.object({
 		.optional()
 		.catch(undefined)
 		.describe('Ordering of this page in the sidebar (lower sorts first).'),
+	sidebar_label: z
+		.string()
+		.optional()
+		.catch(undefined)
+		.describe(
+			"Name shown for this page in the sidebar instead of `title`. On a folder's index page it names the folder."
+		),
 	icon: z
 		// Normalize the same way the runtime resolver (`loadLucideIcon`) does so a
 		// hand-typed `Calendar`/`my_icon` still matches the canonical lowercase-dash

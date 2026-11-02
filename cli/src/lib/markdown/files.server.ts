@@ -253,6 +253,8 @@ export interface NavItem {
 	isHome: boolean;
 	/** Frontmatter `title`; overrides the deslugified filename when present. */
 	title?: string;
+	/** Frontmatter `sidebar_label`; overrides `title` in the sidebar. */
+	sidebarLabel?: string;
 	/** Frontmatter `sidebar_position`; lower sorts first. */
 	sidebar_position?: number | null;
 	/** Frontmatter `icon`; rendered in the sidebar icon column. */
@@ -261,7 +263,7 @@ export interface NavItem {
 
 /** Resolved display name used for the alphabetical tiebreak and rendered label. */
 function navDisplayName(item: NavItem): string {
-	return item.title ?? (item.isHome ? 'Home' : deslugify(item.name));
+	return item.sidebarLabel ?? item.title ?? (item.isHome ? 'Home' : deslugify(item.name));
 }
 
 /**
@@ -305,6 +307,7 @@ export async function getNavItems(dir: string): Promise<NavItem[]> {
 					// Set below after the whole walk so only one file wins `/`.
 					isHome: false,
 					title: meta.title,
+					sidebarLabel: meta.sidebar_label,
 					sidebar_position: meta.sidebar_position,
 					icon: meta.icon
 				});

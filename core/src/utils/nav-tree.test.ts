@@ -72,4 +72,46 @@ describe('buildNavTreeFromFlat', () => {
 		expect(tree.directories[0].name).toBe('Sales');
 		expect(tree.directories[0].pages.map((p) => p.href)).toEqual(['/sales/second', '/sales/first']);
 	});
+
+	it('nests subfolders in order and links folder index pages from the heading', () => {
+		const items: FlatNavItem[] = [
+			{ name: 'index', slug: 'cadie/index', isHome: false, title: 'Long Title', sidebarLabel: 'CADIE' },
+			{ name: 'comparison-group', slug: 'cadie/comparison-group', isHome: false },
+			{ name: 'index', slug: 'cadie/part-I/index', isHome: false, title: 'Part I' },
+			{ name: 'overview', slug: 'cadie/part-I/overview', isHome: false },
+			{ name: 'index', slug: 'cadie/part-II/index', isHome: false, title: 'Part II' },
+			{ name: 'csea', slug: 'budget/schedule/csea', isHome: false }
+		];
+
+		const tree = buildNavTreeFromFlat(items);
+
+		expect(tree.directories).toEqual([
+			{
+				id: 'cadie',
+				name: 'CADIE',
+				href: '/cadie',
+				pages: [
+					{ name: 'Comparison Group', href: '/cadie/comparison-group', icon: null },
+					{
+						id: 'cadie/part-I',
+						name: 'Part I',
+						href: '/cadie/part-I',
+						pages: [{ name: 'Overview', href: '/cadie/part-I/overview', icon: null }]
+					},
+					{ id: 'cadie/part-II', name: 'Part II', href: '/cadie/part-II', pages: [] }
+				]
+			},
+			{
+				id: 'budget',
+				name: 'Budget',
+				pages: [
+					{
+						id: 'budget/schedule',
+						name: 'Schedule',
+						pages: [{ name: 'Csea', href: '/budget/schedule/csea', icon: null }]
+					}
+				]
+			}
+		]);
+	});
 });
