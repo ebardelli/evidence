@@ -9,7 +9,7 @@ A self-hosted Evidence deployment ([`evidence serve`](/cli/commands#evidence-ser
 To authenticate users against your organization's identity provider, deploy `evidence serve` behind an authenticating reverse proxy (also known as an identity-aware proxy). The proxy integrates with your identity provider over OIDC or SAML, enforces sign-in on every request, and forwards only authenticated traffic to Evidence.
 
 <Warning>
-  Authentication controls who can reach the deployment; it does not scope what each user sees. Every authenticated user is served the same reports, queried against the single warehouse identity defined in [`connection.yaml`](/cli/connections). Self-hosted deployments do not enforce per-report [access control](/features/page-level-access-control) or [row-level security](/features/access-rules) — those are applied against a per-viewer identity available only in [Evidence Studio](/self-host#self-host-vs-evidence-studio). Deployments that require differentiated access to reports or data should use Evidence Studio.
+  Authentication controls who can reach the deployment; by default it does not scope what each user sees. Every authenticated user is served the same reports, queried against the single warehouse identity defined in [`connection.yaml`](/cli/connections). Upstream self-hosted deployments do not enforce per-report [access control](/features/page-level-access-control) or [row-level security](/features/access-rules) — those are applied against a per-viewer identity available only in [Evidence Studio](/self-host#self-host-vs-evidence-studio). This deployment's fork adds one narrow exception, a page-visibility allowlist described in [Restricting individual pages to an allowlist](#restricting-individual-pages-to-an-allowlist) below — it does not scope query results, so it is still not a substitute for Studio. Deployments that need real per-viewer report or row scoping should use Evidence Studio.
 </Warning>
 
 ## Architecture
@@ -18,7 +18,7 @@ To authenticate users against your organization's identity provider, deploy `evi
 User ──▶ Authenticating reverse proxy (OIDC / SAML) ──▶ evidence serve
 ```
 
-The proxy is the sole entry point and the authentication boundary; Evidence runs with its built-in authentication disabled. Evidence does not read the authenticated user's identity from the proxy, so reports, queries, and filters are the same for every authenticated user.
+The proxy is the sole entry point and the authentication boundary; Evidence runs with its built-in authentication disabled. Evidence can optionally display the authenticated user's email in the sidebar (see [Displaying the proxy identity](#displaying-the-proxy-identity) below), but this is cosmetic — reports, queries, and filters remain the same for every authenticated user.
 
 <Steps>
   <Step title="Restrict network access to the proxy">
@@ -32,18 +32,174 @@ The proxy is the sole entry point and the authentication boundary; Evidence runs
   </Step>
 </Steps>
 
+## Displaying the proxy identity
+
+Evidence can show the signed-in viewer's identity in the sidebar, in place of the default "Not logged in" state, and expose it to markdown/SQL as `{{ $user.* }}` (see [below](#using-the-proxy-identity-in-markdown-and-sql)). There are two ways to configure this, and **JWT verification is the recommended one** — it's the only mode where the identity is cryptographically tied to your identity provider rather than to whatever a header happens to contain.
+
+### JWT verification (recommended)
+
+Most identity-aware proxies forward the signed-in user's identity as a signed JWT, not just a plain header: oauth2-proxy can pass the ID token via `--pass-authorization-header=true` (as `Authorization: Bearer <token>`), Cloudflare Access sets `Cf-Access-Jwt-Assertion`, GCP Identity-Aware Proxy sets `X-Goog-IAP-JWT-Assertion`, and Pomerium sets `X-Pomerium-Jwt-Assertion`. Evidence can verify that token's signature against your identity provider's JWKS and read the viewer's identity only from its verified claims:
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_AUTH_PROXY_JWT_JWKS_URL` | JWKS endpoint used to verify the token's signature. Setting this enables JWT mode. Must be `https://` (or `localhost`/`127.0.0.1` for local testing) — Evidence refuses to start verifying tokens against a plaintext endpoint. |
+| `EVIDENCE_AUTH_PROXY_JWT_HEADER` | Optional: name of the inbound header holding the token (default `Authorization`, read as `Bearer <token>`/`bearer <token>` or a bare token) |
+| `EVIDENCE_AUTH_PROXY_JWT_ISSUER` | The token's expected `iss` claim. Accepts a comma-separated list of acceptable values — see below. At least one of this and `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` is required. |
+| `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` | The token's expected `aud` claim. Also accepts a comma-separated list. At least one of this and `EVIDENCE_AUTH_PROXY_JWT_ISSUER` is required. |
+| `EVIDENCE_AUTH_PROXY_JWT_EMAIL_CLAIM` | Optional: claim to read the viewer's email from (default `email`) |
+| `EVIDENCE_AUTH_PROXY_JWT_NAME_CLAIM` | Optional: claim to read a display name from (default `name`) |
+
+<Warning>
+  At least one of `EVIDENCE_AUTH_PROXY_JWT_ISSUER` or `EVIDENCE_AUTH_PROXY_JWT_AUDIENCE` must be set — Evidence refuses every request in JWT mode until one is configured. Without either, any validly-signed token from the JWKS endpoint is accepted, including one minted for a completely different application that happens to share your identity provider (a real risk for shared endpoints like Google's or a multi-app Entra ID tenant). Setting both is best; `aud` is generally the stronger check since it's scoped to this specific application.
+</Warning>
+
+<Note>
+  **Google specifically** issues ID tokens with `iss` set to either `accounts.google.com` or `https://accounts.google.com` — Google's own [google-auth-library](https://github.com/googleapis/google-auth-library-nodejs) accepts both, and which form a given token carries isn't something a deployment controls. Set `EVIDENCE_AUTH_PROXY_JWT_ISSUER=accounts.google.com,https://accounts.google.com` (both, comma-separated) rather than either alone — otherwise every sign-in fails verification with `unexpected "iss" claim value`, not just ones with an expired token.
+</Note>
+
+<Note>
+  A token that's present but fails verification — bad signature, disallowed algorithm, expired, wrong issuer or audience — is treated as no identity at all. Evidence never falls back to trusting a plain header in this mode, even if `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` is also set.
+</Note>
+
+Because the signature is verified against the identity provider's own keys, this mode is safe even if a request could reach Evidence directly, bypassing the proxy — an attacker can set any header they like, but they can't forge a validly signed token. It's still good practice to keep Evidence off the public network regardless (see [Restrict network access to the proxy](#architecture) above).
+
+<Warning>
+  The default `EVIDENCE_AUTH_PROXY_JWT_HEADER` is `Authorization` — the same header [HTTP Basic Auth](/self-host#authentication) uses. Evidence refuses every request in JWT mode if both are configured against that same header, since Basic Auth's gate runs first and would reject every bearer token with 401 before JWT verification ever ran. If you run both together, point `EVIDENCE_AUTH_PROXY_JWT_HEADER` at a dedicated header instead (e.g. `X-Forwarded-Access-Token`), and configure the proxy to forward the token there.
+</Warning>
+
+### Plain header (no verification)
+
+For proxies that only forward a plain header — Authelia/Authentik's `Remote-Email`, or oauth2-proxy without `--pass-authorization-header` — Evidence can trust that header's value directly, with no signature to check:
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` | Name of the inbound header holding the viewer's email (e.g. `X-Auth-Request-Email`). Ignored when JWT mode (above) is configured. |
+| `EVIDENCE_AUTH_PROXY_NAME_HEADER` | Optional: name of the inbound header holding a display name (e.g. `X-Auth-Request-User`) |
+| `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER` | Set to `true` to accept the plain header for [query authorization](#authorizing-queries). Without it, `evidence serve` refuses to start in plain header mode. |
+
+<Warning>
+  Unlike JWT mode, this is not cryptographically verified — it only changes what the sidebar displays and what `{{ $user.* }}` resolves to based on whatever value is in the header. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity, including bypassing the [page allowlist](#restricting-individual-pages-to-an-allowlist) below. Prefer JWT verification above when your proxy supports it.
+</Warning>
+
+## Redirecting to sign-in when the proxy identity lapses
+
+Either mode above can end up with no identity on a given request even though it's configured — a JWT that's missing, expired, or otherwise fails verification, or a blank header because the proxy's own session lapsed. By default this degrades quietly to serve mode's "not logged in" sidebar state; a page gated by an `auth:` allowlist (below) instead gets a 403.
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_AUTH_PROXY_LOGIN_URL` | Optional: when set, a request with no proxy identity is redirected here instead — typically the proxy's own sign-in endpoint (e.g. oauth2-proxy's `/oauth2/start`), which re-runs the identity provider flow and hands Evidence a fresh token on the way back. Include the literal placeholder `{returnTo}` anywhere in the URL to have it replaced with the page the viewer was headed to, e.g. `/oauth2/start?rd={returnTo}`. |
+| `EVIDENCE_AUTH_PROXY_LOGOUT_URL` | Optional: when set, and a proxy identity is present, the sidebar shows a "Log out" action pointing here — typically the proxy's sign-out endpoint (e.g. oauth2-proxy's `/oauth2/sign_out`). |
+
+<Note>
+  Both are unset by default, and only take effect once a trust mode above (JWT or plain header) is configured — an unconfigured deployment (e.g. `evidence dev`, or serve mode without either) never has a proxy identity to begin with, so it never redirects.
+</Note>
+
+## Using the proxy identity in markdown and SQL
+
+<Warning>
+  This is a local extension on this deployment's fork of Evidence — not part of upstream Evidence. It's convenience/personalization only: it interpolates plain text into markdown and query strings, the same as any other [frontmatter variable](/core-concepts/variables). It is **not** row-level security — nothing stops a page author from omitting a `$user` filter, and nothing scopes results the way [Evidence Studio's row-level security](/features/access-rules) does. It relies on the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above (JWT-verified when configured, otherwise an unverified header).
+</Warning>
+
+When the same proxy identity used above is configured, it's also exposed to markdown and SQL as [built-in variables](/core-concepts/variables#built-in-variables), the same `{{ $user.* }}` syntax upstream Evidence uses for a Studio-logged-in viewer:
+
+```md
+Welcome, {{ $user.email }}.
+```
+
+```sql my_data
+select * from orders where owner_email = '{{ $user.email }}'
+```
+
+| Variable | Source |
+| --- | --- |
+| `{{ $user.email }}` | The verified JWT's email claim in JWT mode, otherwise `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` |
+| `{{ $user.first_name }}` | The verified JWT's name claim in JWT mode, otherwise `EVIDENCE_AUTH_PROXY_NAME_HEADER` — either way, most proxies/tokens forward a single display name rather than separate first/last names, so the whole value lands here |
+| `{{ $user.last_name }}` | Always empty — no source supplies it |
+
+`{{ $organization.name }}` is also always empty; self-host has no organization concept to source it from.
+
+This only resolves in `evidence serve`; in `evidence dev` there is no proxy identity, so `{{ $user.* }}` renders blank and does not fail validation (matching how the same variables behave in an embedded view with no signed-in viewer).
+
+## Restricting individual pages to an allowlist
+
+<Warning>
+  This is a local extension on this deployment's fork of Evidence — it is not part of upstream Evidence and will not appear in other Evidence deployments. It is **not** a substitute for [Evidence Studio's](/self-host#self-host-vs-evidence-studio) per-viewer [page-level access control](/features/page-level-access-control) or [row-level security](/features/access-rules): those apply against a verified per-viewer identity and can scope both which reports a viewer sees and which rows they see within a report. This extension only compares the proxy-forwarded email against an allowlist, and it does **not** scope query results — every allowed viewer sees the same data. Deployments that need real per-viewer report or row scoping should use Evidence Studio.
+
+  It inherits the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above: this allowlist is only as strong as the identity check behind it. In JWT mode the identity is cryptographically verified, so the allowlist holds even if a request reaches Evidence directly. In plain header mode it is not — a request that bypasses the proxy can set the header itself and pass the allowlist as anyone, so plain header mode must only be used when Evidence is reachable exclusively through the proxy. **Use JWT mode for any page gating viewer emails against an allowlist.**
+</Warning>
+
+A page can be gated to a specific set of viewer emails with an `auth:` block in its frontmatter, checked against the same proxy-forwarded identity used for the sidebar:
+
+```md
+---
+title: Finance summary
+auth:
+  users: [alice@example.com, bob@example.com]
+---
+```
+
+Add `query` to also allow anyone returned by a SQL query (run server-side against `connection.yaml`; the first result column is read as the allowed emails). `users` and `query` are additive — a viewer is allowed if their email appears in either:
+
+```md
+---
+auth:
+  users: [alice@example.com]
+  query: select email from allowed_users where page = 'finance'
+---
+```
+
+| Field | Purpose |
+| --- | --- |
+| `auth.users` | Static list of allowed emails. |
+| `auth.query` | SQL query whose first result column is read as allowed emails. Cached for 60 seconds per query. |
+| `auth.message` | Custom message shown to a denied viewer, in place of the default "does not have access" text. `{email}` is replaced with the viewer's email. |
+
+If the frontmatter block is absent, the page is unrestricted (unchanged from default behavior). If it's present, a request without a proxy identity (the token missing/invalid in JWT mode, or the header missing/blank in plain header mode) is refused with a 403, as is a viewer whose email matches neither list. If any page has an `auth:` block but neither JWT nor plain header mode is configured, `evidence serve` refuses to start and names those pages. This check only runs in `evidence serve`; in `evidence dev` there is no proxy identity to check against, so pages render normally for local authoring.
+
+The same check also applies to the page's queries. See [Authorizing queries](#authorizing-queries) below.
+
+Use `auth.message` to tell a denied viewer how to get access, instead of the generic default:
+
+```md
+---
+auth:
+  users: [alice@example.com]
+  message: "{email} isn't on the Finance team. Ask in #finance-access for a share."
+---
+```
+
+## Authorizing queries
+
+Pages fetch their data from the browser through Evidence's `/api/query` endpoint. In `evidence serve`, every request to it must name the page it comes from, and Evidence checks it before running anything:
+
+1. **Identity.** If any page has an `auth:` block, the request needs a proxy identity, or it gets a 401. Plain header identities count only with `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true`.
+2. **Page access.** The page must exist (404 otherwise), and the viewer must pass its `auth:` block, using the same check and the same `auth.query` cache as loading the page (403 otherwise, with the page's `auth.message`). A viewer can't fetch a gated page's data by naming it from another page.
+3. **Tables.** On DuckDB and MotherDuck connections, the SQL must be a single `SELECT`, and every table and table function it reads must be one that the page's own queries read (403 otherwise). Inputs used with `.literal` (for example `from {{db_selector.literal}}.students`) only allow their own options: the inline `options`, or the values of their `data` query.
+
+`evidence dev` runs any SQL as before.
+
+| Env Var | Purpose |
+| --- | --- |
+| `EVIDENCE_QUERY_AUTHZ` | Set to `off` to go back to running any SQL the browser sends in `evidence serve`, and log a warning at startup. Temporary: kept for one release. |
+
+<Warning>
+  The table check limits which tables a page's queries can reach. It doesn't limit what a viewer does with those tables: someone allowed onto a page can still write their own `SELECT` against the tables that page reads, for example to see raw rows behind an aggregate. Table and column names (not data) from `information_schema` are readable from any page, because table filters and dimension grids need them. On connections other than DuckDB and MotherDuck, only the identity and page access checks run.
+</Warning>
+
 ## Supported proxies and providers
 
 Any authenticating proxy that integrates with your identity provider over OIDC or SAML is compatible. Commonly used options include:
 
-| Proxy / gateway | Integrates with | Notes |
-| --- | --- | --- |
-| [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) (Zero Trust) | Okta, Microsoft Entra ID, Google Workspace, SAML/OIDC | Managed service; no proxy to operate |
-| [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) | Any OIDC provider | Open source; deployed alongside Evidence |
-| [Pomerium](https://www.pomerium.com/) | OIDC and SAML providers | Open-source identity-aware proxy with group-based policy |
-| [Authelia](https://www.authelia.com/) / [Authentik](https://goauthentik.io/) | Self-hosted identity store | No external provider required |
-| AWS [Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html) | Amazon Cognito or any OIDC provider | Native authentication at the load balancer |
-| Google Cloud [Identity-Aware Proxy](https://cloud.google.com/iap) | Google Workspace / Cloud Identity | Wraps the service; no proxy to operate |
-| Azure [App Service authentication](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization) | Microsoft Entra ID | Built-in authentication in front of the container |
+| Proxy / gateway | Integrates with | JWT header (for [JWT mode](#jwt-verification-recommended)) | Notes |
+| --- | --- | --- | --- |
+| [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) (Zero Trust) | Okta, Microsoft Entra ID, Google Workspace, SAML/OIDC | `Cf-Access-Jwt-Assertion` | Managed service; no proxy to operate |
+| [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) | Any OIDC provider | `Authorization` (with `--pass-authorization-header=true`) | Open source; deployed alongside Evidence |
+| [Pomerium](https://www.pomerium.com/) | OIDC and SAML providers | `X-Pomerium-Jwt-Assertion` | Open-source identity-aware proxy with group-based policy |
+| [Authelia](https://www.authelia.com/) / [Authentik](https://goauthentik.io/) | Self-hosted identity store | Plain headers only (`Remote-Email`) — use [plain header mode](#plain-header-no-verification) | No external provider required |
+| AWS [Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html) | Amazon Cognito or any OIDC provider | Not standard JWKS — ALB signs `X-Amzn-Oidc-Data` with per-`kid` keys from a proprietary endpoint, not a JWKS document, so [JWT mode](#jwt-verification-recommended) doesn't apply; use [plain header mode](#plain-header-no-verification) against `x-amzn-oidc-identity` | Native authentication at the load balancer |
+| Google Cloud [Identity-Aware Proxy](https://cloud.google.com/iap) | Google Workspace / Cloud Identity | `X-Goog-IAP-JWT-Assertion` | Wraps the service; no proxy to operate |
+| Azure [App Service authentication](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization) | Microsoft Entra ID | `X-MS-TOKEN-AAD-ID-TOKEN` (with token store enabled) | Built-in authentication in front of the container |
+
+Consult each proxy's own documentation for its exact JWKS URL, issuer, and audience to configure the matching `EVIDENCE_AUTH_PROXY_JWT_*` env vars above — remember at least one of issuer or audience is required.
 
 These integrate with standard enterprise identity providers — including Okta, Microsoft Entra ID, Google Workspace, Auth0, Ping Identity, and OneLogin — over OIDC or SAML.

@@ -17,7 +17,8 @@ import {
 	hasProjectMetricFiles,
 	projectRootRelativePath,
 	resolvePageSettings,
-	pageDisplayTitle
+	pageDisplayTitle,
+	parsePageAuth
 } from '$lib/markdown/files.server';
 import { loadProjectConfig } from '$cli/project-config/load-config';
 import { cliUsesRelativeResolution } from '$lib/markdown/resolution';
@@ -28,6 +29,8 @@ import { loadTranslations } from '$lib/server/translations.server';
 import { resolvePageTheme } from '$lib/server/theme.server';
 import { resolveProjectSettings } from '$lib/server/project-settings.server';
 import { ServerQueryService } from '$lib/server/ServerQueryService';
+import { assertPageAuthorized } from '$lib/server/page-auth.server';
+import { getAccountVariables } from '$lib/server/proxy-auth.server';
 
 // Track last modified times per slug
 const lastMtimes = new Map<string, number>();
@@ -85,7 +88,7 @@ type ProjectDiscovery = {
 };
 let serveDiscovery: ProjectDiscovery | null = null;
 
-export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, parent }) => {
+export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, parent, request }) => {
 	// Prevent caching so file changes are reflected immediately
 	setHeaders({
 		'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
@@ -94,6 +97,9 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 	const cwd = getProjectCwd();
 	const slug = params.path;
 	const isServe = isServeMode();
+	// `{{ $user.* }}` in markdown/SQL — serve mode only; dev mode has no
+	// reverse-proxy identity to source it from (see proxy-auth.server.ts).
+	const account = isServe ? await getAccountVariables(request.headers) : undefined;
 
 	// `.catch` so a malformed evidence.config.yaml degrades to no project layout
 	// defaults rather than 500-ing the page (mirrors Studio's graceful read).
@@ -107,6 +113,12 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 
 	if (!file) {
 		error(404, `Page not found: ${slug}`);
+	}
+
+	// `auth:` frontmatter gate — serve mode only; dev mode has no reverse-proxy
+	// identity to check against (see page-auth.server.ts).
+	if (isServe) {
+		await assertPageAuthorized(parsePageAuth(file.content), request.headers);
 	}
 
 	// Check if file actually changed (dev-only; serve ships immutable content,
@@ -161,7 +173,8 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 			basePath,
 			useRelativeResolution,
 			translations,
-			projectSettings
+			projectSettings,
+			account
 		});
 
 	return {
