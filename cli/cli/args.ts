@@ -31,6 +31,7 @@ Deploy
   link        Attach this repo to an existing Studio project
   unlink      Disconnect this repo from its Studio project
   serve       Self-host the project (production server; needs connection.yaml)
+  export      Pre-build all queries as Parquet files for static hosting
 
 Data
   query       Run a SQL query against the warehouse
@@ -100,6 +101,7 @@ export type Command =
 	| 'token'
 	| 'upgrade'
 	| 'telemetry'
+	| 'export'
 	| 'help'
 	| 'version';
 
@@ -168,6 +170,10 @@ export interface ParsedArgs {
 	host: string | null;
 	/** Subcommand for telemetry; null = status */
 	telemetrySubcommand: TelemetrySubcommand | null;
+	/** Output directory for `export` (--output-dir); null = ./dist */
+	exportOutputDir: string | null;
+	/** Max concurrent queries for `export` (--concurrency); null = 5 */
+	exportConcurrency: number | null;
 }
 
 /** Flags that consume the following token as their value. */
@@ -187,7 +193,9 @@ const VALUE_FLAGS = new Set([
 	'--host',
 	'--warehouse',
 	'--root-directory',
-	'--project'
+	'--project',
+	'--output-dir',
+	'--concurrency'
 ]);
 
 /** Boolean flags (no value). */
@@ -320,7 +328,9 @@ export function parseArgs(): ParsedArgs {
 		linkProject: null,
 		open: undefined,
 		host: null,
-		telemetrySubcommand: null
+		telemetrySubcommand: null,
+		exportOutputDir: null,
+		exportConcurrency: null
 	} satisfies Omit<ParsedArgs, 'command'>;
 
 	// Check for help/version flags first. Note: `-v` now means `--verbose`
@@ -362,6 +372,7 @@ export function parseArgs(): ParsedArgs {
 		'docs',
 		'upgrade',
 		'telemetry',
+		'export',
 		'dev',
 		'serve',
 		'publish',
@@ -427,6 +438,7 @@ export function parseArgs(): ParsedArgs {
 	else if (firstArg === 'docs') command = 'docs';
 	else if (firstArg === 'upgrade') command = 'upgrade';
 	else if (firstArg === 'telemetry') command = 'telemetry';
+	else if (firstArg === 'export') command = 'export';
 	else if (firstArg === 'dev') command = 'dev';
 	else if (firstArg === 'serve') command = 'serve';
 	else if (firstArg === 'publish') command = 'publish';
@@ -620,6 +632,21 @@ export function parseArgs(): ParsedArgs {
 		lineageArgs = remaining.filter((a, i) => !a.startsWith('-') && i !== branchValueIdx);
 	}
 
+	// --output-dir <path> and --concurrency <n> for the export command
+	let exportOutputDir: string | null = null;
+	let exportConcurrency: number | null = null;
+	if (command === 'export') {
+		const outDirIdx = args.findIndex((a) => a === '--output-dir');
+		if (outDirIdx !== -1 && args[outDirIdx + 1] && !args[outDirIdx + 1].startsWith('-')) {
+			exportOutputDir = args[outDirIdx + 1];
+		}
+		const concIdx = args.findIndex((a) => a === '--concurrency');
+		if (concIdx !== -1 && args[concIdx + 1]) {
+			const parsed = parseInt(args[concIdx + 1], 10);
+			if (!isNaN(parsed) && parsed > 0) exportConcurrency = parsed;
+		}
+	}
+
 	return {
 		...base,
 		command,
@@ -645,7 +672,9 @@ export function parseArgs(): ParsedArgs {
 		linkProject,
 		open,
 		host,
-		telemetrySubcommand
+		telemetrySubcommand,
+		exportOutputDir,
+		exportConcurrency
 	};
 }
 
