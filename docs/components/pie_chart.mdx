@@ -206,7 +206,7 @@ date_range={
 </ResponseField>
 
 <ResponseField name="pct" type="boolean" default="false">
-  Show percentage values on pie slice labels
+  Show percentage values on pie slice labels. With `legend`, the percentage is drawn inside each slice of at least 5%.
 </ResponseField>
 
 <ResponseField name="pct_fmt" type="string" default="pct1">
@@ -270,7 +270,7 @@ chart_options={
 </ResponseField>
 
 <ResponseField name="height" type="number">
-  Set a fixed height for the chart in pixels
+  Set a fixed height for the pie in pixels. The title and legend are added above it, so the pie keeps the same size however many rows the legend wraps to.
 </ResponseField>
 
 <ResponseField name="connect_group" type="string">
