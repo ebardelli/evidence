@@ -7,6 +7,8 @@ import {
 	validateEmptyAttributes
 } from '../../../validators';
 import { DATE_GRAIN_ATTRIBUTE } from '../../../common/date-options';
+import { ZodAttribute } from '../../../common/zod-attribute';
+import { z } from 'zod';
 
 const attributes = {
 	value: {
@@ -32,6 +34,12 @@ const attributes = {
 		default: undefined,
 		description:
 			'Sort direction for this pivot column. When specified, the table will be sorted by this column.'
+	},
+	order: {
+		type: ZodAttribute.create(z.array(z.string()).optional()),
+		required: false,
+		description:
+			'Array of pivot values to define the order of the pivoted columns. Values not in the array will appear after the ordered ones, sorted by `sort`.'
 	}
 } as const satisfies UserComponentSchema['attributes'];
 

@@ -39,7 +39,7 @@ export class PivotModel extends UserComponentModel<PivotModelGenerics> {
 	readonly column: UnifiedColumnDefinition | undefined = $derived.by(() => {
 		if (this.hasBlockingError) return undefined;
 
-		const { sort } = this.attributes;
+		const { sort, order } = this.attributes;
 		const fmt = this.resolvedFmt ?? getDefaultFormatForDateGrain(this.resolvedDateGrain);
 
 		const { sqlWithAlias, sqlWithoutAlias, alias, isComplexExpression, isTemporalDateGrain } =
@@ -56,6 +56,7 @@ export class PivotModel extends UserComponentModel<PivotModelGenerics> {
 			fmt,
 			date_grain: this.resolvedDateGrain,
 			sort,
+			order,
 			isTemporalDateGrain: isTemporalDateGrain
 		};
 	});
