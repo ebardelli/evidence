@@ -20,6 +20,7 @@ import type { TranslationMap } from '@evidence/core/types/translations';
 import type { AccountVariables } from '@evidence/core/types/account-variables';
 import { preprocessVariables } from '@evidence/core/user-components/Renderer/MarkdocProcessor/preprocess-variables';
 import { registerFiltersFromAST } from '@evidence/core/user-components/Renderer/MarkdocProcessor/register-filters';
+import { resolvePartialFile } from '@evidence/core/user-components/common/resolve-reference';
 import { rewriteSqlFenceTranslationTokens } from '@evidence/core/user-components/Renderer/MarkdocProcessor/rewrite-bare-translation-sql';
 import {
 	process as coreProcess,
@@ -106,20 +107,26 @@ export async function process(markdown: string, options: ProcessOptions = {}): P
 		{ basePath: options.basePath, useRelativeResolution: options.useRelativeResolution }
 	);
 
+	const resolution = {
+		basePath: options.basePath,
+		useRelativeResolution: options.useRelativeResolution
+	};
+	const parsedPartials = parsePartials(options.partials, dialect);
+
 	// Validators run before transform registers inline queries, so register
-	// page-level ones up front — else same-page queries read as missing tables.
+	// page-level ones (and those of included partials) up front — else they read
+	// as missing tables or, when referenced as `{{query}}`, missing filter IDs.
 	const { ast: preAst, referencedDataSources, definedInlineQueries } = preRegisterInlineQueries(
 		markdown,
 		inlineQueries,
-		dialect
+		dialect,
+		parsedPartials,
+		resolution
 	);
 	// Same ordering problem for filters: introspection interpolates `{{filter_id}}`
 	// references, so the page's filter components must exist (with empty values)
 	// before any warehouse round-trip — else every reference is "Missing filter ID".
-	registerFiltersFromAST(preAst, filters, parsePartials(options.partials, dialect), undefined, {
-		basePath: options.basePath,
-		useRelativeResolution: options.useRelativeResolution
-	});
+	registerFiltersFromAST(preAst, filters, parsedPartials, undefined, resolution);
 	const inlineQueryMetadata = options.queryService
 		? await loadInlineQueryMetadata(
 				options.queryService,
@@ -246,13 +253,30 @@ function parsePartials(
 function preRegisterInlineQueries(
 	markdown: string,
 	inlineQueries: InlineQueries,
-	dialect: SqlDialect
+	dialect: SqlDialect,
+	partials?: Record<string, Node>,
+	resolution?: { basePath?: string; useRelativeResolution?: boolean }
 ): { ast: Node; referencedDataSources: Set<string>; definedInlineQueries: Set<string> } {
 	const ast = preRegisterParse(markdown, dialect);
 	const referencedDataSources = new Set<string>();
 	const definedInlineQueries = new Set<string>();
+	const resolutionConfig = {
+		evidenceUseRelativeResolution: resolution?.useRelativeResolution,
+		evidenceBasePath: resolution?.basePath
+	};
+	const visitedPartials = new Set<string>();
 
 	function walk(node: Node) {
+		// Queries defined in an included partial are page-global at render time,
+		// so walk the partial body as if it were inlined (once per partial).
+		if (node.type === 'tag' && node.tag === 'partial' && typeof node.attributes?.file === 'string') {
+			const key = resolvePartialFile(node.attributes.file, node, resolutionConfig);
+			const partialAst = partials?.[key];
+			if (partialAst && !visitedPartials.has(key)) {
+				visitedPartials.add(key);
+				walk(partialAst);
+			}
+		}
 		if (node.type === 'fence' && node.attributes?.language === 'sql' && node.attributes?.meta) {
 			const name = node.attributes.meta as string;
 			inlineQueries.set(name, (node.attributes.content as string) ?? '');

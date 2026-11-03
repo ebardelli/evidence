@@ -102,4 +102,30 @@ select count(*) as n from page_views where organization_id = {{nonexistent}}
 		const messages = result.validationErrors.map((e) => e.error?.message ?? '');
 		expect(messages.join('\n')).toContain('Missing filter ID');
 	});
+
+	it('resolves {{query}} references to queries defined in an included partial', async () => {
+		const executed: string[] = [];
+		const page = `
+{% partial file="shared/queries" /%}
+
+\`\`\`sql page_kpis
+select n from {{ base_views }}
+\`\`\`
+
+{% big_value data="page_kpis" value="sum(n)" /%}
+`;
+		const partials = {
+			'shared/queries': `
+\`\`\`sql base_views
+select count(*) as n from page_views
+\`\`\`
+`
+		};
+		const result = await process(page, { queryService: fakeQueryService(executed), partials });
+
+		const messages = result.validationErrors.map((e) => e.error?.message ?? '');
+		expect(messages.join('\n')).not.toContain('Missing filter ID');
+		expect(messages.join('\n')).not.toContain('does not exist');
+		expect(executed.some((sql) => sql.includes('page_views'))).toBe(true);
+	});
 });
