@@ -58,6 +58,21 @@ export class InlineQueryMetadata extends Metadata {
 		// This override prevents the parent's load() from being called by the watch in Metadata constructor
 	}
 
+	/** Filter IDs referenced by `rawQuery` and, transitively, by the inline queries it references. */
+	private collectFilterIds(rawQuery: string, visited: Set<string> = new Set()): string[] {
+		const filterIds: string[] = [];
+		for (const id of extractFilterIds(rawQuery)) {
+			if (visited.has(id)) continue;
+			visited.add(id);
+			filterIds.push(id);
+			const referenced = this.deps.inlineQueries.has(id)
+				? this.deps.inlineQueries.getRaw(id)
+				: undefined;
+			if (referenced) filterIds.push(...this.collectFilterIds(referenced, visited));
+		}
+		return filterIds;
+	}
+
 	async loadInlineQueryMetadata(queryName: string): Promise<void> {
 		const rawQuery = this.deps.inlineQueries.getRaw(queryName);
 		if (!rawQuery) return;
@@ -89,8 +104,10 @@ export class InlineQueryMetadata extends Metadata {
 					// Successfully interpolated, use the result
 					queryToDescribe = result.sql;
 
-					// Extract filter IDs referenced in query (using shared utility)
-					const filterIds = extractFilterIds(rawQuery);
+					// Extract filter IDs referenced in query, including those reached
+					// through referenced inline queries: interpolation inlines their SQL,
+					// so an empty filter there breaks this query just the same.
+					const filterIds = this.collectFilterIds(rawQuery);
 
 					if (filterIds.length > 0) {
 						// Check if any referenced filters have empty values
