@@ -233,6 +233,9 @@
 		return `${calculatedRadius}%`;
 	});
 
+	// Slices under this share are too thin for an inside percentage label.
+	const MIN_INSIDE_LABEL_PCT = 5;
+
 	// Raises this chart's tooltip above the floating chat pane when rendered
 	// inside it; '' (ECharts default) everywhere else.
 	const elevatedTooltipCss = getElevatedChartTooltipCss();
@@ -279,8 +282,9 @@
 				center: ['50%', '50%'],
 				avoidLabelOverlap: true,
 				label: {
-					show: !legend,
-					position: !legend ? 'outside' : 'center',
+					// With a legend, `pct` puts the percentage inside slices big enough to hold it.
+					show: !legend || pct,
+					position: !legend ? 'outside' : 'inside',
 					formatter: !legend
 						? pct
 							? (params) => {
@@ -289,9 +293,22 @@
 									return `${params.name}\n${formattedPct}`;
 								}
 							: '{b}'
-						: '',
-					textBorderColor: 'transparent',
-					textBorderWidth: 0,
+						: pct
+							? (params) => {
+									const percent = Array.isArray(params) ? params[0].percent : params.percent;
+									if (percent < MIN_INSIDE_LABEL_PCT) return '';
+									return formatValue(percent / 100, pct_fmt, `${percent}%`);
+								}
+							: '',
+					// Inside labels sit on the slice color: white with a dark outline reads on any of them.
+					...(legend
+						? {
+								color: '#fff',
+								fontWeight: 600,
+								textBorderColor: 'rgba(0, 0, 0, 0.6)',
+								textBorderWidth: 2
+							}
+						: { textBorderColor: 'transparent', textBorderWidth: 0 }),
 					textShadowColor: 'transparent',
 					textShadowBlur: 0
 				},
@@ -335,11 +352,9 @@
 	let chart: EChartsInstance | undefined = $state(undefined);
 </script>
 
-<div
-	class="flex w-full flex-col"
-	class:h-full={!height}
-	style:height={height ? `${height}px` : undefined}
->
+<!-- An explicit height sizes the pie itself, so the title and a wrapping legend
+     add to it instead of shrinking the pie. -->
+<div class="flex w-full flex-col" class:h-full={!height}>
 	{#if title || subtitle}
 		<ComponentTitle {title} {subtitle} {info} {info_link} {info_link_title} />
 	{/if}
@@ -351,7 +366,8 @@
 
 		<ECharts
 			bind:chart
-			class={cn('h-full w-full flex-1', !height && 'min-h-[215px]')}
+			class={cn('w-full', !height && 'h-full min-h-[215px] flex-1')}
+			style={height ? `height: ${height}px` : undefined}
 			options={stableOptions}
 			group={props.connect_group}
 		/>

@@ -111,7 +111,8 @@ const attributes = {
 		type: Boolean,
 		required: false,
 		default: false,
-		description: 'Show percentage values on pie slice labels',
+		description:
+			'Show percentage values on pie slice labels. With `legend`, the percentage is drawn inside each slice of at least 5%.',
 		affectsQuery: false
 	},
 	pct_fmt: {

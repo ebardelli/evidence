@@ -38,7 +38,16 @@ export interface NavPage {
 export interface NavDirectory {
 	id: string;
 	name: string;
-	pages: NavPage[];
+	/** The folder's index page, linked from the directory heading. */
+	href?: string | null;
+	/** Pages and nested directories, in sidebar order. */
+	pages: NavEntry[];
+}
+
+export type NavEntry = NavPage | NavDirectory;
+
+export function isNavDirectory(entry: NavEntry): entry is NavDirectory {
+	return 'pages' in entry;
 }
 
 export interface NavTree {
@@ -110,52 +119,67 @@ export interface FlatNavItem {
 	isHome: boolean;
 	/** Frontmatter `title`; overrides the deslugified filename when present. */
 	title?: string;
+	/** Frontmatter `sidebar_label`; overrides `title` in the sidebar. */
+	sidebarLabel?: string;
 	/** Frontmatter `icon`; rendered in the sidebar icon column. */
 	icon?: string | null;
 }
 
 /**
  * Build a `NavTree` from the CLI's flat list of discovered pages. Slugs
- * without a `/` become root pages; slugs nested under a folder are grouped
- * by their first path segment into a directory, mirroring the two-level
- * model the published sidebar uses. Items are emitted in the order given, so
- * the caller is responsible for sorting (e.g. by `sidebar_position`) first.
+ * without a `/` become root pages; nested slugs become directories that
+ * mirror the folder structure. A folder's `index` page is not listed as a
+ * page: it names the directory and its heading links to it. Items are
+ * emitted in the order given (a directory sits where its first page does),
+ * so the caller is responsible for sorting (e.g. by `sidebar_position`) first.
  */
 export function buildNavTreeFromFlat(items: FlatNavItem[]): NavTree {
 	const rootPages: NavPage[] = [];
-	const dirOrder: string[] = [];
-	const dirPages = new Map<string, NavPage[]>();
+	const directories: NavDirectory[] = [];
+	const dirsById = new Map<string, NavDirectory>();
 	// PageNavTree keys its `{#each}` on `href`, so duplicates crash hydration
 	// with each_key_duplicate. Callers *should* dedupe upstream, but keep the
 	// sidebar defensive so a malformed input degrades to a first-wins nav
 	// instead of taking the client down.
 	const seenHrefs = new Set<string>();
 
+	function directoryFor(segments: string[]): NavDirectory {
+		const id = segments.join('/');
+		const existing = dirsById.get(id);
+		if (existing) return existing;
+		const dir: NavDirectory = { id, name: deslugify(segments[segments.length - 1]), pages: [] };
+		dirsById.set(id, dir);
+		if (segments.length === 1) directories.push(dir);
+		else directoryFor(segments.slice(0, -1)).pages.push(dir);
+		return dir;
+	}
+
 	for (const item of items) {
-		const href = item.isHome ? '/' : `/${item.slug}`;
+		const segments = item.slug.split('/');
+		const isFolderIndex = !item.isHome && segments.length > 1 && item.name === 'index';
+		const href = item.isHome
+			? '/'
+			: isFolderIndex
+				? `/${segments.slice(0, -1).join('/')}`
+				: `/${item.slug}`;
 		if (seenHrefs.has(href)) continue;
 		seenHrefs.add(href);
-		const segments = item.slug.split('/');
-		const displayName = item.title ?? (item.isHome ? 'Home' : deslugify(item.name));
+		const displayName =
+			item.sidebarLabel ?? item.title ?? (item.isHome ? 'Home' : deslugify(item.name));
 
 		if (item.isHome || segments.length === 1) {
 			rootPages.push({ name: displayName, href, icon: item.icon ?? null });
 			continue;
 		}
 
-		const dir = segments[0];
-		if (!dirPages.has(dir)) {
-			dirPages.set(dir, []);
-			dirOrder.push(dir);
+		const dir = directoryFor(segments.slice(0, -1));
+		if (isFolderIndex) {
+			dir.name = displayName;
+			dir.href = href;
+		} else {
+			dir.pages.push({ name: displayName, href, icon: item.icon ?? null });
 		}
-		dirPages.get(dir)?.push({ name: displayName, href, icon: item.icon ?? null });
 	}
-
-	const directories: NavDirectory[] = dirOrder.map((dir) => ({
-		id: dir,
-		name: deslugify(dir),
-		pages: dirPages.get(dir) ?? []
-	}));
 
 	return { rootPages, directories };
 }
