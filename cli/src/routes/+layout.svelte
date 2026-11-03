@@ -359,6 +359,23 @@
 						</Sidebar.MenuItem>
 					</Sidebar.Menu>
 				</Sidebar.Footer>
+				{:else}
+				<!-- Without the user menu, keep its theme switch at the bottom of the sidebar. -->
+				<Sidebar.Footer>
+					<Sidebar.Menu>
+						<Sidebar.MenuItem>
+							<Sidebar.MenuButton class="cursor-pointer" onclick={() => toggleMode()}>
+								{#if mode.current === 'light'}
+									<SunIcon class="size-4" />
+									Light
+								{:else}
+									<MoonIcon class="size-4" />
+									Dark
+								{/if}
+							</Sidebar.MenuButton>
+						</Sidebar.MenuItem>
+					</Sidebar.Menu>
+				</Sidebar.Footer>
 				{/if}
 			</Sidebar.Root>
 			<Sidebar.Inset class="flex flex-col">
