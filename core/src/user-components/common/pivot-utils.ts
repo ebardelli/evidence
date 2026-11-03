@@ -1077,6 +1077,30 @@ export function generatePivotData(data: DataPoint[], config: PivotConfig): Pivot
 		rows = filteredRows;
 	}
 
+	// Compare two values of a pivot column: values listed in the pivot's `order` come first,
+	// in that order; the rest follow, sorted by the pivot's `sort` direction (default asc).
+	const comparePivotValues = (aPivot: unknown, bPivot: unknown, pivotField: string): number => {
+		const pivotCol = unifiedByRendering.get(pivotField);
+
+		const order = pivotCol?.order;
+		if (order?.length) {
+			const aIndex = order.indexOf(String(aPivot));
+			const bIndex = order.indexOf(String(bPivot));
+			if (aIndex !== -1 || bIndex !== -1) {
+				if (aIndex === -1) return 1;
+				if (bIndex === -1) return -1;
+				return aIndex - bIndex;
+			}
+		}
+
+		const sortMultiplier = pivotCol?.sort === 'desc' ? -1 : 1;
+		if (config.columnTypes.get(pivotField) === 'number') {
+			return (Number(aPivot) - Number(bPivot)) * sortMultiplier;
+		}
+		// String comparison for all other types
+		return String(aPivot).localeCompare(String(bPivot)) * sortMultiplier;
+	};
+
 	// Sort columnMeta to match the final column order
 	// This ensures columnMeta entries align with the actual columns
 	const sortedColumnMeta = [
@@ -1107,22 +1131,9 @@ export function generatePivotData(data: DataPoint[], config: PivotConfig): Pivot
 							if (aPivot === null) return 1;
 							if (bPivot === null) return -1;
 
-							// Get the pivot column name and its type
 							const pivotField = config.pivots[i - 1]; // Adjust index for measuresFirst
 							if (pivotField) {
-								const pivotType = config.columnTypes.get(pivotField);
-								const pivotCol = unifiedByRendering.get(pivotField);
-								const sortDirection = pivotCol?.sort || 'asc'; // Default to ascending
-								const sortMultiplier = sortDirection === 'desc' ? -1 : 1;
-
-								if (pivotType === 'number') {
-									const aNum = Number(aPivot);
-									const bNum = Number(bPivot);
-									return (aNum - bNum) * sortMultiplier;
-								} else {
-									// String comparison for all other types
-									return String(aPivot).localeCompare(String(bPivot)) * sortMultiplier;
-								}
+								return comparePivotValues(aPivot, bPivot, pivotField);
 							}
 
 							// Fallback to string comparison if no pivot field found
@@ -1145,21 +1156,7 @@ export function generatePivotData(data: DataPoint[], config: PivotConfig): Pivot
 							if (aPivot === null) return 1;
 							if (bPivot === null) return -1;
 
-							// Get the pivot column name and its type
-							const pivotField = config.pivots[i];
-							const pivotType = config.columnTypes.get(pivotField);
-							const pivotCol = unifiedByRendering.get(pivotField);
-							const sortDirection = pivotCol?.sort || 'asc'; // Default to ascending
-							const sortMultiplier = sortDirection === 'desc' ? -1 : 1;
-
-							if (pivotType === 'number') {
-								const aNum = Number(aPivot);
-								const bNum = Number(bPivot);
-								return (aNum - bNum) * sortMultiplier;
-							}
-
-							// Default to string comparison for all other types
-							return String(aPivot).localeCompare(String(bPivot)) * sortMultiplier;
+							return comparePivotValues(aPivot, bPivot, config.pivots[i]);
 						}
 					}
 				}
