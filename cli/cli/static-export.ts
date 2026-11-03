@@ -113,9 +113,16 @@ async function exportTables(
 // 2. Pages → HTML
 // ---------------------------------------------------------------------------
 
-/** URL slugs for every page under pagesDir ('' is the home page). */
-async function discoverPageSlugs(pagesDir: string): Promise<string[]> {
-	const slugs: string[] = [];
+/**
+ * URL slugs for every page under pagesDir ('' is the home page), plus the
+ * `folder/index` aliases of folder index pages. A folder's index page is
+ * rendered once, at `/folder`; its `/folder/index` alias only redirects there.
+ */
+async function discoverPageSlugs(
+	pagesDir: string
+): Promise<{ slugs: string[]; indexAliases: string[] }> {
+	const slugs = new Set<string>();
+	const folderIndexes: string[] = [];
 	async function walk(dir: string) {
 		for (const entry of await readdir(dir, { withFileTypes: true })) {
 			const full = path.join(dir, entry.name);
@@ -126,15 +133,31 @@ async function discoverPageSlugs(pagesDir: string): Promise<string[]> {
 				const head = (await readFile(full, 'utf-8')).slice(0, 2000);
 				if (/^---[\s\S]*?^type:\s*partial\s*$[\s\S]*?^---/m.test(head)) continue;
 				const rel = path.relative(pagesDir, full).split(path.sep).join('/').replace(/\.md$/, '');
-				if (rel === 'index') slugs.push('');
-				// The sidebar links a folder's index page as `/folder/index`; `/folder` works too.
-				else if (rel.endsWith('/index')) slugs.push(rel, rel.slice(0, -'/index'.length));
-				else slugs.push(rel);
+				if (rel === 'index') slugs.add('');
+				else if (rel.endsWith('/index')) folderIndexes.push(rel);
+				else slugs.add(rel);
 			}
 		}
 	}
 	await walk(pagesDir);
-	return [...new Set(slugs)].sort();
+	const indexAliases: string[] = [];
+	for (const rel of folderIndexes) {
+		const folder = rel.slice(0, -'/index'.length);
+		// `folder.md` next to `folder/index.md` owns `/folder`, leaving the index
+		// page reachable only at `/folder/index`: render it there.
+		if (slugs.has(folder)) slugs.add(rel);
+		else {
+			slugs.add(folder);
+			indexAliases.push(rel);
+		}
+	}
+	return { slugs: [...slugs].sort(), indexAliases: indexAliases.sort() };
+}
+
+/** A static page that sends `/folder/index` on to `/folder`. */
+function redirectHtml(target: string): string {
+	const url = target.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+	return `<!doctype html><meta charset="utf-8"><title>Redirecting…</title><link rel="canonical" href="${url}"><meta http-equiv="refresh" content="0; url=${url}"><script>location.replace(${JSON.stringify(target)} + location.search + location.hash)</script><a href="${url}">${url}</a>\n`;
 }
 
 /**
@@ -265,7 +288,7 @@ export async function staticExport(options: StaticExportOptions = {}): Promise<v
 	process.env.EVIDENCE_STATIC_BASE = base;
 	const server = await loadServer();
 
-	const slugs = await discoverPageSlugs(config.pagesDir);
+	const { slugs, indexAliases } = await discoverPageSlugs(config.pagesDir);
 	let failures = 0;
 	for (const slug of slugs) {
 		process.stdout.write(`  ${pc.dim('/' + slug)} ... `);
@@ -279,6 +302,11 @@ export async function staticExport(options: StaticExportOptions = {}): Promise<v
 		await mkdir(path.dirname(target), { recursive: true });
 		await writeFile(target, rewriteHtml(await response.text(), base));
 		console.log(pc.green('✓'));
+	}
+	for (const alias of indexAliases) {
+		const target = path.join(outputBase, alias, 'index.html');
+		await mkdir(path.dirname(target), { recursive: true });
+		await writeFile(target, redirectHtml(`${base}/${alias.slice(0, -'/index'.length)}`));
 	}
 
 	// Not-found page (GitHub Pages and most static hosts serve /404.html).
