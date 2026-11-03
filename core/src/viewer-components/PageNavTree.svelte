@@ -24,6 +24,17 @@
 		);
 	}
 
+	// A folder only acts as a folder (chevron + collapsible children) when
+	// something is nested under it. A folder holding just its index page is
+	// shown as a plain page link, and one with nothing to show is hidden.
+	function hasChildren(dir: NavDirectory): boolean {
+		return dir.pages.some((entry) => !isNavDirectory(entry) || isVisible(entry));
+	}
+
+	function isVisible(dir: NavDirectory): boolean {
+		return !!dir.href || hasChildren(dir);
+	}
+
 	function isDirectoryCollapsed(dir: NavDirectory): boolean {
 		if (collapsedDirectories[dir.id] === undefined) {
 			return !dirHasActivePage(dir);
@@ -65,7 +76,11 @@
 
 {#snippet directory(dir: NavDirectory)}
 	{@const collapsed = isDirectoryCollapsed(dir)}
-	{#if dir.href}
+	{#if !hasChildren(dir)}
+		{#if dir.href}
+			{@render pageLink({ name: dir.name, href: dir.href })}
+		{/if}
+	{:else if dir.href}
 		<!-- Linked heading: the chevron toggles, the name opens the folder's index page. -->
 		<Sidebar.MenuButton isActive={dir.href === currentPath}>
 			{#snippet child({ props })}
@@ -109,7 +124,7 @@
 		</Sidebar.MenuButton>
 	{/if}
 
-	{#if !collapsed}
+	{#if !collapsed && hasChildren(dir)}
 		<div class="my-1 border-l pl-1">
 			{#each dir.pages as entry (isNavDirectory(entry) ? `dir:${entry.id}` : entry.href)}
 				{#if isNavDirectory(entry)}
