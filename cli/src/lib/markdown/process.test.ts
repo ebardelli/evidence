@@ -128,4 +128,29 @@ select count(*) as n from page_views
 		expect(messages.join('\n')).not.toContain('does not exist');
 		expect(executed.some((sql) => sql.includes('page_views'))).toBe(true);
 	});
+
+	it('skips introspecting a query whose referenced inline query uses an empty filter', async () => {
+		// `{{ base_views }}` inlines SQL that references the still-empty `{{org}}`,
+		// so describing `page_kpis` now would send invalid SQL (`in `).
+		const executed: string[] = [];
+		const page = `
+{% dropdown id="org" data="orgs" value_column="org_id" multiple=true /%}
+
+\`\`\`sql base_views
+select count(*) as n from page_views where organization_id in {{org}}
+\`\`\`
+
+\`\`\`sql page_kpis
+select n from {{ base_views }}
+\`\`\`
+
+{% big_value data="page_kpis" value="sum(n)" /%}
+`;
+		const result = await process(page, { queryService: fakeQueryService(executed) });
+
+		const messages = result.validationErrors.map((e) => e.error?.message ?? '');
+		expect(messages.join('\n')).not.toContain('Missing filter ID');
+		expect(executed.some((sql) => sql.includes('organization_id in'))).toBe(false);
+	});
 });
+
