@@ -28,6 +28,7 @@ export interface UnifiedColumnDefinition {
 	hide?: boolean;
 	fmt?: string;
 	sort?: 'asc' | 'desc';
+	order?: string[]; // Pivot-only: explicit order of pivoted column values
 	red_negatives?: boolean;
 
 	// Measure-specific properties
