@@ -12,6 +12,11 @@ export type DuckDBCredentials = {
 	schemas?: string[];
 	/** SQL run once when the client starts — INSTALL/LOAD extensions, ATTACH, etc. */
 	setupSql?: string;
+	/**
+	 * Directory relative file reads in setup_sql and queries resolve against
+	 * (→ DuckDB `file_search_path`): the folder holding connection.yaml.
+	 */
+	baseDir?: string;
 	/** Paths readable once locked (→ DuckDB `allowed_directories`). */
 	allowedPaths?: string[];
 	/** Lock the instance after setup; undefined = on in serve mode, off in dev. */
@@ -36,6 +41,7 @@ export function normalizeCredentials(raw: unknown): DuckDBCredentials {
 		path: c.path,
 		schemas: Array.isArray(c.schemas) ? (c.schemas as string[]) : [],
 		setupSql: typeof c.setupSql === 'string' ? c.setupSql : undefined,
+		baseDir: typeof c.baseDir === 'string' ? c.baseDir : undefined,
 		allowedPaths: Array.isArray(c.allowedPaths) ? (c.allowedPaths as string[]) : [],
 		lock: typeof c.lock === 'boolean' ? c.lock : undefined,
 		queryTimeoutSeconds: typeof c.queryTimeoutSeconds === 'number' ? c.queryTimeoutSeconds : undefined,

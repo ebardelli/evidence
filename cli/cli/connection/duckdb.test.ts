@@ -250,3 +250,41 @@ describe('unlocked DuckDB instance', () => {
 		}
 	});
 });
+
+describe('baseDir', () => {
+	it('resolves relative reads in setup_sql and queries against baseDir, not the process cwd', async () => {
+		expect(existsSync(path.join(process.cwd(), 'ok.csv'))).toBe(false);
+		// Unlocked, as in `evidence dev`. Once locked, DuckDB checks a relative
+		// path against the process cwd before file_search_path applies, so
+		// locked query-time reads still follow the cwd (the project dir in the
+		// compiled CLI).
+		const config = locked({
+			lock: false,
+			baseDir: allowedDir,
+			setupSql: `-- test ${seq++}\nCREATE TABLE from_setup AS FROM read_csv('ok.csv');`
+		});
+		const fromSetup = await executeDuckDBQuery('select count(*) as c from from_setup', config);
+		expect(Number(fromSetup.rows[0]?.c)).toBe(1);
+		const fromQuery = await executeDuckDBQuery("select b from 'ok.csv'", config);
+		expect(Number(fromQuery.rows[0]?.b)).toBe(2);
+	});
+
+	it('resolves relative reads in setup_sql against baseDir on a locked instance', async () => {
+		const result = await executeDuckDBQuery(
+			'select count(*) as c from from_setup',
+			locked({
+				baseDir: allowedDir,
+				setupSql: `-- test ${seq++}\nCREATE TABLE from_setup AS FROM read_csv('ok.csv');`
+			})
+		);
+		expect(Number(result.rows[0]?.c)).toBe(1);
+	});
+
+	it('does not let a relative read escape allowed_paths once locked', async () => {
+		const e = await rejection(
+			"select * from read_csv('secret.csv')",
+			locked({ baseDir: outsideDir })
+		);
+		expect(e).toBeInstanceOf(Error);
+	});
+});

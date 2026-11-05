@@ -24,7 +24,7 @@ allowed_paths: ["gs://my-bucket/"]
   Path to a local `.duckdb` file, resolved relative to `connection.yaml`. Default: `":memory:"`.
 </ResponseField>
 <ResponseField name="setup_sql" type="string">
-  SQL run once when the instance starts: `INSTALL`/`LOAD` extensions, `CREATE SECRET`, `ATTACH` databases. `${VAR}` references are filled from the environment.
+  SQL run once when the instance starts: `INSTALL`/`LOAD` extensions, `CREATE SECRET`, `ATTACH` databases. `${VAR}` references are filled from the environment. Relative file reads (`read_csv('data/x.csv')`, `FROM 'x.parquet'`), here and in report queries, resolve relative to `connection.yaml`. A relative `ATTACH` path resolves against the directory `evidence` runs in, so use `path` or an absolute path to attach a local database from anywhere else.
 </ResponseField>
 <ResponseField name="setup_sql_path" type="string">
   Path to a file holding the setup SQL, resolved relative to `connection.yaml`. Use instead of `setup_sql`, not alongside it.
