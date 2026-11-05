@@ -49,6 +49,7 @@ export async function resolveDuckDBCredentials(
 		path: dbPath,
 		schemas: config.schemas,
 		setupSql,
+		baseDir: path.resolve(opts.cwd),
 		allowedPaths,
 		lock: config.lock,
 		queryTimeoutSeconds: config.query_timeout_seconds,
