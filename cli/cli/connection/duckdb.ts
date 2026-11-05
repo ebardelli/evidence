@@ -290,6 +290,7 @@ function configKey(c: DuckDBCredentials): string {
 	return JSON.stringify([
 		c.path,
 		c.setupSql,
+		c.baseDir,
 		shouldLock(c),
 		c.allowedPaths ?? [],
 		c.memoryLimit,
@@ -334,6 +335,11 @@ async function createInstance(config: DuckDBConfig): Promise<DuckDBInstanceType>
 		if (config.memoryLimit) await setupConnection.run(`SET memory_limit = ${sqlString(config.memoryLimit)}`);
 		await setupConnection.run(`SET threads = ${Math.floor(config.threads ?? DEFAULT_THREADS)}`);
 		await setupConnection.run('SET enable_external_file_cache = true');
+		// Relative reads (read_csv('data/x.csv'), FROM 'x.parquet') resolve
+		// against connection.yaml's folder, like `path` does, not the process
+		// cwd — which is cli/ when the CLI runs from source. ATTACH ignores
+		// file_search_path and still uses the process cwd.
+		if (config.baseDir) await setupConnection.run(`SET GLOBAL file_search_path = ${sqlString(config.baseDir)}`);
 		if (config.setupSql) {
 			try {
 				await setupConnection.run(config.setupSql);

@@ -342,6 +342,7 @@ describe('loadConnectionConfig', () => {
 				path: ':memory:',
 				schemas: [],
 				setupSql: undefined,
+				baseDir: path.resolve(workDir),
 				allowedPaths: [],
 				lock: undefined,
 				queryTimeoutSeconds: 120,
