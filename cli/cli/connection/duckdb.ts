@@ -218,7 +218,7 @@ export function isQueryRejectedError(e: unknown): e is QueryRejectedError {
 type DuckDBConfig = Omit<DuckDBConnectionConfig, 'type'>;
 
 const DEFAULT_QUERY_TIMEOUT_SECONDS = 120;
-const DEFAULT_MAX_RESULT_ROWS = 100_000;
+const DEFAULT_MAX_RESULT_ROWS = 1_000_000;
 const DEFAULT_THREADS = 4;
 
 // Unset `lock` follows the run mode: on for `evidence serve` (viewers reach
@@ -563,8 +563,13 @@ export async function executeDuckDBQuery(
 		// would have been truncated is refused instead. Not a streaming reader:
 		// streaming (like prepared execution) was measurably slower.
 		if (locked && result.rowCount > maxRows) {
+			// The usual cause is a pivot table with subtotals: core loads a pivot
+			// client-side when its detail rows fit under 100k, then fetches every
+			// subtotal level via GROUPING SETS, which can be many times that.
 			throw new QueryRejectedError(
-				`Query returned more than ${maxRows} rows (max_result_rows)`,
+				`Query returned more than ${maxRows} rows (max_result_rows). ` +
+					'A table with subtotals=true returns a row per subtotal level; ' +
+					'set subtotals=false or raise max_result_rows in connection.yaml.',
 				413
 			);
 		}

@@ -42,7 +42,7 @@ allowed_paths: ["gs://my-bucket/"]
   Interrupt a query on a locked instance after this many seconds (HTTP 504). Default: `120`. Maximum: `2147483`.
 </ResponseField>
 <ResponseField name="max_result_rows" type="number">
-  Reject a result with more rows than this on a locked instance (HTTP 413), rather than truncating it. Default: `100000`.
+  Reject a result with more rows than this on a locked instance (HTTP 413), rather than truncating it. Default: `1000000`. A pivot table with `subtotals=true` returns a row for every subtotal level, which can be many times its detail rows, so keep this well above the largest table you pivot.
 </ResponseField>
 <ResponseField name="memory_limit" type="string">
   DuckDB `memory_limit`, e.g. `'4GB'`. Applied before `setup_sql`.
