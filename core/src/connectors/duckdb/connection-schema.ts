@@ -108,7 +108,7 @@ export const duckdbBase = z.object({
 		.number()
 		.int()
 		.positive()
-		.default(100_000)
+		.default(1_000_000)
 		.meta(
 			meta({
 				label: 'Max result rows',

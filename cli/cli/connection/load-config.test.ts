@@ -312,7 +312,7 @@ describe('loadConnectionConfig', () => {
 				allowedPaths: [],
 				lock: undefined,
 				queryTimeoutSeconds: 120,
-				maxResultRows: 100000,
+				maxResultRows: 1000000,
 				memoryLimit: undefined,
 				threads: undefined,
 				redactedValues: []
