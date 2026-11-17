@@ -135,6 +135,7 @@ auth:
   rows:
     students: school_id in (select school_id from staff_access where email = {{ $user.email }})
     attendance: school_id in (select school_id from staff_access where email = {{ $user.email }})
+  tables: [schools, calendar]
   message: "{email} isn't linked to a school. Ask in #data-access."
 ---
 ```
@@ -142,6 +143,7 @@ auth:
 | Field | Purpose |
 | --- | --- |
 | `auth.rows` | Table → SQL condition. The key is the table as you write it in SQL (`students`, `main.students`). `{{ $user.email }}` and `{{ $user.first_name }}` are available. |
+| `auth.tables` | The other tables this page's queries may read, written as in SQL. Tables in the page's own `auth.rows` are included automatically. Once any page uses `auth.rows`, a page may read **only** these. |
 | `auth.message` | Message shown to a denied viewer instead of the default "does not have access" text. `{email}` is replaced with the viewer's email. |
 
 ### What the server does
@@ -149,7 +151,8 @@ auth:
 - **Every read is filtered.** Pages fetch their data from the browser through `/api/query`, and each request names its page. Evidence parses the SQL with DuckDB and replaces every reference to a filtered table, including inside joins, subqueries, `SUMMARIZE` and `DESCRIBE`, with `(SELECT * FROM table WHERE <condition>)`, then runs the result. Editing the SQL in the browser doesn't help, because the rewrite happens on the server.
 - **No rows means no access.** If every filtered table on the page comes back empty for the viewer, they get a 403 with `auth.message`, both when opening the page and on its queries. A request with no proxy identity also gets a 403.
 - **Filtered tables stay filtered everywhere.** Once any page filters a table, a query that reads it on behalf of a page *without* its own filter for that table is refused. A viewer can't get around a filter by naming another page.
-- **Other tables are not restricted.** Tables no page filters are readable from any page, as in upstream Evidence.
+- **Pages read only the tables they declare.** Once any page uses `auth.rows`, every page in the project, filtered or not, can read only the tables in its own `auth.tables` and `auth.rows`. A query that reads any other table, anywhere in the statement, is refused with a 403. A page with no `auth` block can't read any table, so add `auth.tables` to every page that runs queries. Tables used only inside a filter condition (like `staff_access` above) don't need declaring and stay unreadable unless a page declares them.
+- **Declaring a table doesn't lift another page's filter.** A table that some page filters can only be read from a page that filters it too. Listing it in `auth.tables` isn't enough.
 
 Once any page uses `auth.rows`, every `/api/query` request must also:
 
@@ -157,7 +160,7 @@ Once any page uses `auth.rows`, every `/api/query` request must also:
 - not define a CTE with the same name as a filtered table;
 - not use a table function that reads tables or files by name (`query`, `query_table`, `read_*`, `*_scan`, `parquet_*`, `iceberg_*`, `delta_*`, `sniff_csv`).
 
-`evidence serve` refuses to start if any page has `auth.rows` and a reverse-proxy identity isn't configured, if plain header mode is used without `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true`, or if the connection isn't DuckDB or MotherDuck. `evidence dev` ignores `auth.rows` and shows unfiltered data, so you can author pages locally.
+`evidence serve` refuses to start if any page has `auth.rows` and a reverse-proxy identity isn't configured, if plain header mode is used without `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true`, or if the connection isn't DuckDB or MotherDuck. `evidence dev` ignores `auth.rows` and `auth.tables` and shows unfiltered data, so you can author pages locally.
 
 <Warning>
   Filters apply to the tables named in `auth.rows`, not to the data behind them. If a view, table macro or another table exposes the same rows, filter it too. If a filtered table is a view over files, the files can't be read by name (the reader functions above are blocked). Access results are cached for 60 seconds per viewer and page, so a change to the access table can take up to a minute to apply.

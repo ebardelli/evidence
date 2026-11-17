@@ -17,6 +17,9 @@
  *   any page filters is *protected*: a query reading it from a page without
  *   its own filter for it is refused, so naming a different page can't get
  *   around the filter.
+ * - Declared tables: once any page has row filters, a query may only read
+ *   tables its page declares, in `auth.tables` or as a key of its own
+ *   `auth.rows`. Every other table is refused, on every page.
  *
  * DuckDB / MotherDuck connections only (the rewrite uses DuckDB's parser);
  * hooks.server.ts refuses to start otherwise.
@@ -89,6 +92,17 @@ function policyOf(file: MarkdownFile): PagePolicy | null {
 	);
 	if (!Object.keys(rows).length) return null;
 	return { slug: file.slug, rows, message: auth?.message };
+}
+
+/**
+ * The tables a page's queries may read once row security is on: its
+ * `auth.tables` plus the keys of its own `auth.rows`.
+ */
+export function declaredTables(file: MarkdownFile): string[] {
+	const auth = parsePageAuth(file.content);
+	return [...(auth?.tables ?? []), ...Object.keys(auth?.rows ?? {})]
+		.map((table) => table.trim())
+		.filter(Boolean);
 }
 
 let policiesCache: Promise<PagePolicy[]> | null = null;
@@ -211,7 +225,8 @@ const NOT_PERMITTED = 'Query not permitted on this page.';
  * Authorizes a serve-mode `/api/query` request and returns the SQL to run:
  * unchanged when the project has no row filters or the query reads no
  * filtered table, otherwise rewritten so every filtered table is read
- * through its predicate.
+ * through its predicate. Once the project has row filters, a query reading
+ * a table its page doesn't declare is refused.
  */
 export async function authorizeQuery(
 	page: unknown,
@@ -235,6 +250,7 @@ export async function authorizeQuery(
 		throw e;
 	}
 	const pageRows = Object.entries(policyOf(file)?.rows ?? {});
+	const pageTables = declaredTables(file);
 
 	const parsed = await parseSelect(sql);
 	if (!parsed.ok) {
@@ -262,6 +278,13 @@ export async function authorizeQuery(
 	// Which predicates apply to each table reference.
 	const predicatesFor = (ref: Parameters<typeof tableMatches>[1]) =>
 		pageRows.filter(([key]) => tableMatches(key, ref)).map(([, predicate]) => predicate);
+
+	// Only tables the page declares are readable at all.
+	const undeclared = info.tables.find((ref) => !pageTables.some((key) => tableMatches(key, ref)));
+	if (undeclared) {
+		const name = [undeclared.catalog, undeclared.schema, undeclared.table].filter(Boolean).join('.');
+		return { ok: false, status: 403, error: `Table ${name} is not declared in this page's auth.tables.` };
+	}
 
 	let needsRewrite = false;
 	for (const ref of info.tables) {

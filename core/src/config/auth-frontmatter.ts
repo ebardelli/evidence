@@ -12,6 +12,10 @@ import { z } from 'zod';
  * server applies the predicate to every read of that table made from this
  * page, and a viewer for whom every filtered table comes back empty is
  * refused the page. `message` overrides the default denial text.
+ *
+ * `tables` lists the other tables this page's queries may read. Once any page
+ * in the project has `rows`, every page is limited to its own `tables` plus
+ * the keys of its own `rows`; a query reading anything else is refused.
  */
 export const authSchema = z.object({
 	rows: z
@@ -20,6 +24,13 @@ export const authSchema = z.object({
 		.catch(undefined)
 		.describe(
 			'Row filters keyed by table name. Each value is a SQL predicate applied server-side to every read of that table from this page; `{{ $user.email }}` is the viewer\'s email.'
+		),
+	tables: z
+		.array(z.string())
+		.optional()
+		.catch(undefined)
+		.describe(
+			'Tables (as written in SQL) this page\'s queries may read, besides those in `rows`. Once any page uses `auth.rows`, every other table is refused.'
 		),
 	message: z
 		.string()

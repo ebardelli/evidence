@@ -27,9 +27,17 @@ const ROSTER = `---
 auth:
   rows:
     students: school_id in (select school_id from staff where email = {{ $user.email }})
+  tables: [schools]
   message: "{email} has no students"
 ---
 # Roster
+`;
+
+const DIRECTORY = `---
+auth:
+  tables: [main.schools, students]
+---
+# Directory
 `;
 
 const table = (table_name: string): JsonNode => ({
@@ -74,7 +82,7 @@ async function project(pages: Record<string, string>): Promise<string> {
 }
 
 beforeAll(async () => {
-	filtered = await project({ roster: ROSTER, other: '# Other\n' });
+	filtered = await project({ roster: ROSTER, directory: DIRECTORY, other: '# Other\n' });
 	plain = await project({ home: '# Home\n' });
 });
 afterAll(async () => {
@@ -165,6 +173,51 @@ describe('authorizeQuery', () => {
 			sql: 'select * from schools'
 		});
 		expect(deserialize).not.toHaveBeenCalled();
+	});
+
+	it('refuses tables the page does not declare', async () => {
+		parsesTo(select(table('teachers')));
+		expect(await authorizeQuery('roster', 'select * from teachers', as('alice@x.org'))).toEqual({
+			ok: false,
+			status: 403,
+			error: "Table teachers is not declared in this page's auth.tables."
+		});
+		// A page with no auth block can read no tables at all.
+		parsesTo(select(table('schools')));
+		expect(await authorizeQuery('other', 'select * from schools', as())).toMatchObject({ status: 403 });
+		// Tables inside the server's own predicates (staff) aren't readable directly.
+		parsesTo(select(table('staff')));
+		expect(await authorizeQuery('roster', 'select * from staff', as('alice@x.org'))).toMatchObject({
+			status: 403
+		});
+	});
+
+	it('checks every table reference, not just the first', async () => {
+		parsesTo(select(table('schools'), { where_clause: { subquery: select(table('teachers')) } }));
+		expect(await authorizeQuery('roster', 'select …', as('alice@x.org'))).toMatchObject({ status: 403 });
+	});
+
+	it('lets a page without filters read its declared tables', async () => {
+		parsesTo(select({ ...table('schools'), schema_name: 'main' }));
+		expect(await authorizeQuery('directory', 'select * from main.schools', as())).toEqual({
+			ok: true,
+			sql: 'select * from main.schools'
+		});
+		parsesTo(select({ ...table('schools'), schema_name: 'other' }));
+		expect(await authorizeQuery('directory', 'select * from other.schools', as())).toMatchObject({
+			status: 403
+		});
+		parsesTo(select({ type: 'TABLE_FUNCTION', function: { function_name: 'range' } }));
+		expect(await authorizeQuery('other', 'select * from range(3)', as())).toMatchObject({ ok: true });
+	});
+
+	it("still refuses another page's filtered table even when declared", async () => {
+		parsesTo(select(table('students')));
+		expect(await authorizeQuery('directory', 'select * from students', as())).toEqual({
+			ok: false,
+			status: 403,
+			error: 'Query not permitted on this page.'
+		});
 	});
 
 	it('refuses a filtered table from a page without that filter', async () => {
