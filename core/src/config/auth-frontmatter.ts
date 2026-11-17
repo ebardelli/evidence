@@ -1,37 +1,36 @@
 import { z } from 'zod';
 
 /**
- * The `auth:` frontmatter block — restricts a page to specific viewers,
- * checked against the reverse-proxy identity in serve mode (see
- * `cli/src/lib/server/proxy-auth.server.ts`). Self-host only; a no-op outside
- * `evidence serve` or when the proxy email header isn't configured.
+ * The `auth:` frontmatter block — per-viewer row security for a page,
+ * enforced against the reverse-proxy identity in `evidence serve` (see
+ * `cli/src/lib/server/row-security.server.ts`). Self-host only; ignored by
+ * `evidence dev`.
  *
- * `users` and `query` are both optional and additive: a viewer is allowed if
- * their email appears in either list. `query` is a SQL string run server-side
- * against `connection.yaml`; its first result column is read as the allowed
- * emails. `message` overrides the default "you don't have access" text shown
- * to a denied viewer.
+ * `rows` maps a table (as written in SQL: `students`, `main.students`) to a
+ * SQL predicate over that table's columns. `{{ $user.email }}` in the
+ * predicate is replaced with the viewer's email as a quoted SQL literal. The
+ * server applies the predicate to every read of that table made from this
+ * page, and a viewer for whom every filtered table comes back empty is
+ * refused the page. `message` overrides the default denial text.
  */
 export const authSchema = z.object({
-	users: z
-		.array(z.string())
-		.optional()
-		.catch(undefined)
-		.describe('Emails allowed to view this page.'),
-	query: z
-		.string()
+	rows: z
+		.record(z.string(), z.string())
 		.optional()
 		.catch(undefined)
 		.describe(
-			"SQL query run server-side against connection.yaml; its first result column is read as allowed emails."
+			'Row filters keyed by table name. Each value is a SQL predicate applied server-side to every read of that table from this page; `{{ $user.email }}` is the viewer\'s email.'
 		),
 	message: z
 		.string()
 		.optional()
 		.catch(undefined)
 		.describe(
-			'Custom message shown to viewers denied access to this page. `{email}` is replaced with the viewer\'s email.'
+			"Custom message shown to viewers denied access to this page. `{email}` is replaced with the viewer's email."
 		)
-});
+})
+	// Kept so the CLI can refuse to serve pages still using the removed
+	// `users` / `query` allowlist keys, rather than serving them unrestricted.
+	.passthrough();
 
 export type AuthConfig = z.infer<typeof authSchema>;

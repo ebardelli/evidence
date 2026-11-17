@@ -2,11 +2,10 @@
  * Reads a viewer identity forwarded by a fronting authenticating reverse
  * proxy (oauth2-proxy, Cloudflare Access, GCP IAP, Pomerium, etc.) for
  * display in serve mode's sidebar, and for the `{{ $user.* }}` variables
- * markdown/SQL can reference (see getAccountVariables below). This is
- * cosmetic/convenience only: it does not scope queries, filters, or which
- * reports a viewer can see beyond the `auth:` frontmatter allowlist in
- * page-auth.server.ts (self-hosted deployments have no other per-viewer
- * access control — see docs/self-host/authentication.mdx).
+ * markdown/SQL can reference (see getAccountVariables below). On its own this
+ * is cosmetic/convenience only; the one place it scopes data is the
+ * `auth.rows` row filters in row-security.server.ts (see
+ * docs/self-host/authentication.mdx).
  *
  * Two trust modes, selected by which env vars are set:
  *

@@ -17,8 +17,7 @@ import {
 	hasProjectMetricFiles,
 	projectRootRelativePath,
 	resolvePageSettings,
-	pageDisplayTitle,
-	parsePageAuth
+	pageDisplayTitle
 } from '$lib/markdown/files.server';
 import { loadProjectConfig } from '$cli/project-config/load-config';
 import { cliUsesRelativeResolution } from '$lib/markdown/resolution';
@@ -29,7 +28,7 @@ import { loadTranslations } from '$lib/server/translations.server';
 import { resolvePageTheme } from '$lib/server/theme.server';
 import { resolveProjectSettings } from '$lib/server/project-settings.server';
 import { ServerQueryService } from '$lib/server/ServerQueryService';
-import { assertPageAuthorized } from '$lib/server/page-auth.server';
+import { assertPageAccess } from '$lib/server/row-security.server';
 import { getAccountVariables } from '$lib/server/proxy-auth.server';
 
 // Track last modified times per slug
@@ -115,10 +114,10 @@ export const load: PageServerLoad = async ({ params, url, cookies, setHeaders, p
 		error(404, `Page not found: ${slug}`);
 	}
 
-	// `auth:` frontmatter gate — serve mode only; dev mode has no reverse-proxy
-	// identity to check against (see page-auth.server.ts).
+	// `auth.rows` page gate — serve mode only; dev mode has no reverse-proxy
+	// identity to check against (see row-security.server.ts).
 	if (isServe) {
-		await assertPageAuthorized(parsePageAuth(file.content), request.headers);
+		await assertPageAccess(file, request.headers);
 	}
 
 	// Check if file actually changed (dev-only; serve ships immutable content,

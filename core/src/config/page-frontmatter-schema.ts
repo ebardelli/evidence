@@ -163,7 +163,7 @@ export const projectRootPageFrontmatterSchema = z.object({
 		.optional()
 		.catch(undefined)
 		.describe(
-			'Self-host only: restrict this page to specific viewers, checked against the reverse-proxy identity. See `auth.users` and `auth.query`.'
+			'Self-host only: per-viewer row filters for this page, enforced server-side against the reverse-proxy identity. See `auth.rows`.'
 		)
 });
 

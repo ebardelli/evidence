@@ -1,17 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pagesWithAuth } from '$lib/server/query-authz.server';
+import { pagesWithLegacyAuth, pagesWithRowFilters } from '$lib/server/row-security.server';
+import { loadConnectionConfig } from '$cli/connection';
 
-vi.mock('$lib/server/query-authz.server', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/server/query-authz.server')>()),
-	pagesWithAuth: vi.fn()
+vi.mock('$lib/server/row-security.server', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/server/row-security.server')>()),
+	pagesWithRowFilters: vi.fn(),
+	pagesWithLegacyAuth: vi.fn()
 }));
-vi.mock('$cli/connection', () => ({ loadConnectionConfig: async () => null }));
+vi.mock('$cli/connection', () => ({ loadConnectionConfig: vi.fn() }));
+
+const policy = (slug: string) => ({ slug, rows: { students: 'true' } });
 
 import { handle, init } from './hooks.server';
 
 const ENV_KEYS = [
 	'EVIDENCE_SERVE',
-	'EVIDENCE_QUERY_AUTHZ',
 	'EVIDENCE_AUTH_PROXY_JWT_JWKS_URL',
 	'EVIDENCE_AUTH_PROXY_EMAIL_HEADER',
 	'EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER',
@@ -22,7 +25,9 @@ let saved: [string, string | undefined][];
 beforeEach(() => {
 	saved = ENV_KEYS.map((k) => [k, process.env[k]]);
 	for (const k of ENV_KEYS) delete process.env[k];
-	vi.mocked(pagesWithAuth).mockReset().mockResolvedValue([]);
+	vi.mocked(pagesWithRowFilters).mockReset().mockResolvedValue([]);
+	vi.mocked(pagesWithLegacyAuth).mockReset().mockResolvedValue([]);
+	vi.mocked(loadConnectionConfig).mockReset().mockResolvedValue({ type: 'motherduck' } as never);
 });
 afterEach(() => {
 	for (const [k, v] of saved) {
@@ -51,28 +56,49 @@ describe('serve-mode disabled routes', () => {
 
 describe('init', () => {
 	it('does nothing outside serve mode', async () => {
-		vi.mocked(pagesWithAuth).mockResolvedValue(['secret']);
+		vi.mocked(pagesWithRowFilters).mockResolvedValue([policy('secret')]);
 		await expect(init()).resolves.toBeUndefined();
 	});
 
-	it('refuses to start with auth: pages and no proxy identity configured', async () => {
+	it('does nothing in serve mode without row filters', async () => {
 		process.env.EVIDENCE_SERVE = '1';
-		vi.mocked(pagesWithAuth).mockResolvedValue(['discipline/incidents']);
+		process.env.EVIDENCE_AUTH_PROXY_EMAIL_HEADER = 'X-Auth-Request-Email';
+		await expect(init()).resolves.toBeUndefined();
+	});
+
+	it('refuses pages still using the removed auth.users / auth.query', async () => {
+		process.env.EVIDENCE_SERVE = '1';
+		vi.mocked(pagesWithLegacyAuth).mockResolvedValue(['finance']);
+		await expect(init()).rejects.toThrow(/finance/);
+	});
+
+	it('refuses to start with auth.rows pages and no proxy identity configured', async () => {
+		process.env.EVIDENCE_SERVE = '1';
+		vi.mocked(pagesWithRowFilters).mockResolvedValue([policy('discipline/incidents')]);
 		await expect(init()).rejects.toThrow(/discipline\/incidents/);
 	});
 
 	it('refuses plain-header identity without the trust opt-in', async () => {
 		process.env.EVIDENCE_SERVE = '1';
 		process.env.EVIDENCE_AUTH_PROXY_EMAIL_HEADER = 'X-Auth-Request-Email';
+		vi.mocked(pagesWithRowFilters).mockResolvedValue([policy('secret')]);
 		await expect(init()).rejects.toThrow(/EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER/);
 		process.env.EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER = 'true';
 		await expect(init()).resolves.toBeUndefined();
 	});
 
-	it('starts with JWT identity and auth: pages', async () => {
+	it('refuses a connection that is not DuckDB-flavoured', async () => {
 		process.env.EVIDENCE_SERVE = '1';
 		process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL = 'https://idp.example.com/jwks';
-		vi.mocked(pagesWithAuth).mockResolvedValue(['secret']);
+		vi.mocked(pagesWithRowFilters).mockResolvedValue([policy('secret')]);
+		vi.mocked(loadConnectionConfig).mockResolvedValue({ type: 'postgres' } as never);
+		await expect(init()).rejects.toThrow(/postgres/);
+	});
+
+	it('starts with JWT identity, a MotherDuck connection and auth.rows pages', async () => {
+		process.env.EVIDENCE_SERVE = '1';
+		process.env.EVIDENCE_AUTH_PROXY_JWT_JWKS_URL = 'https://idp.example.com/jwks';
+		vi.mocked(pagesWithRowFilters).mockResolvedValue([policy('secret')]);
 		await expect(init()).resolves.toBeUndefined();
 	});
 });

@@ -2,11 +2,11 @@ import type { Handle, ServerInit } from '@sveltejs/kit';
 import { proxyAuthConfigured } from '$lib/server/proxy-auth.server';
 import {
 	identityMode,
-	pagesWithAuth,
-	plainHeaderTrusted,
-	queryAuthzEnabled
-} from '$lib/server/query-authz.server';
-import { supportsRelationCheck } from '$lib/server/query-relations';
+	pagesWithLegacyAuth,
+	pagesWithRowFilters,
+	plainHeaderTrusted
+} from '$lib/server/row-security.server';
+import { supportsRowFilters } from '$lib/server/row-filter-sql';
 import { loadConnectionConfig } from '$cli/connection';
 import { stat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -88,44 +88,48 @@ const SERVE_DISABLED_PATHS = [
 ];
 
 // Serve-mode startup checks — throwing here stops `evidence serve` before it
-// binds a port (cli/cli/server.ts awaits server.init()). Fail closed: a page
-// with `auth:` and no proxy identity configured used to render for anyone.
+// binds a port (cli/cli/server.ts awaits server.init()). Row filters fail
+// closed: without a verified identity or a DuckDB-flavoured connection to
+// rewrite queries on, `auth.rows` pages would otherwise serve unfiltered data.
 export const init: ServerInit = async () => {
 	if (!isServeMode()) return;
 
-	const authPages = await pagesWithAuth();
-	if (authPages.length > 0 && !proxyAuthConfigured()) {
+	const legacy = await pagesWithLegacyAuth();
+	if (legacy.length > 0) {
 		throw new Error(
-			`These pages have an \`auth:\` block, but no reverse-proxy identity is configured ` +
-				`(EVIDENCE_AUTH_PROXY_JWT_JWKS_URL or EVIDENCE_AUTH_PROXY_EMAIL_HEADER): ${authPages.join(', ')}`
+			`\`auth.users\` and \`auth.query\` were replaced by \`auth.rows\` row filters; ` +
+				`these pages would be served unrestricted: ${legacy.join(', ')}`
 		);
 	}
 
-	if (!queryAuthzEnabled()) {
-		console.warn(
-			'EVIDENCE_QUERY_AUTHZ=off: /api/query runs any SQL a viewer sends, without page authorization.'
+	const pages = (await pagesWithRowFilters()).map((p) => p.slug);
+	if (pages.length === 0) return;
+
+	if (!proxyAuthConfigured()) {
+		throw new Error(
+			`These pages have \`auth.rows\` filters, but no reverse-proxy identity is configured ` +
+				`(EVIDENCE_AUTH_PROXY_JWT_JWKS_URL or EVIDENCE_AUTH_PROXY_EMAIL_HEADER): ${pages.join(', ')}`
 		);
-		return;
 	}
 
 	if (identityMode() === 'header') {
 		if (!plainHeaderTrusted()) {
 			throw new Error(
-				'EVIDENCE_AUTH_PROXY_EMAIL_HEADER is set without JWT verification. Queries need a verified ' +
+				'EVIDENCE_AUTH_PROXY_EMAIL_HEADER is set without JWT verification. Row filters need a verified ' +
 					'identity: configure EVIDENCE_AUTH_PROXY_JWT_JWKS_URL, or set ' +
 					'EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true if only the proxy can reach this server.'
 			);
 		}
 		console.warn(
-			'EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true: query authorization trusts an unsigned identity header.'
+			'EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true: row filters trust an unsigned identity header.'
 		);
 	}
 
 	const connection = await loadConnectionConfig(getProjectCwd()).catch(() => null);
-	if (connection && !supportsRelationCheck(connection.type)) {
-		console.warn(
-			`Query authorization: ${connection.type} connections get page-level checks only; ` +
-				'per-page table allowlists need a DuckDB or MotherDuck connection.'
+	if (!supportsRowFilters(connection?.type)) {
+		throw new Error(
+			`\`auth.rows\` filters need a DuckDB or MotherDuck connection` +
+				`${connection ? ` (this project uses ${connection.type})` : ''}: ${pages.join(', ')}`
 		);
 	}
 };
@@ -133,7 +137,7 @@ export const init: ServerInit = async () => {
 // Serve-mode perimeter: basic auth gate + hardened headers. All traffic —
 // static assets, SSR pages, and the /api/query SQL relay — flows through
 // hooks, so this is the single choke point. Per-page query authorization
-// happens in the /api/query route itself (query-authz.server.ts).
+// happens in the /api/query route itself (row-security.server.ts).
 export const handle: Handle = async ({ event, resolve }) => {
 	if (event.request.method === 'GET') {
 		const staticResponse = await serveProjectStatic(event.url.pathname);

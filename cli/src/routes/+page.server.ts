@@ -16,8 +16,7 @@ import {
 	hasProjectMetricFiles,
 	projectRootRelativePath,
 	resolvePageSettings,
-	pageDisplayTitle,
-	parsePageAuth
+	pageDisplayTitle
 } from '$lib/markdown/files.server';
 import { loadProjectConfig } from '$cli/project-config/load-config';
 import { cliUsesRelativeResolution } from '$lib/markdown/resolution';
@@ -32,7 +31,7 @@ import {
 	type ResolvedProjectSettings
 } from '$lib/server/project-settings.server';
 import { ServerQueryService } from '$lib/server/ServerQueryService';
-import { assertPageAuthorized } from '$lib/server/page-auth.server';
+import { assertPageAccess } from '$lib/server/row-security.server';
 import { getAccountVariables } from '$lib/server/proxy-auth.server';
 
 // Track last modified time to detect changes (dev only)
@@ -68,10 +67,10 @@ export const load: PageServerLoad = async ({ url, cookies, setHeaders, parent, r
 	// Get home markdown file from CWD
 	const homeFile = await getHomeFile(cwd);
 
-	// `auth:` frontmatter gate — serve mode only; dev mode has no reverse-proxy
-	// identity to check against (see page-auth.server.ts).
+	// `auth.rows` page gate — serve mode only; dev mode has no reverse-proxy
+	// identity to check against (see row-security.server.ts).
 	if (isServe && homeFile) {
-		await assertPageAuthorized(parsePageAuth(homeFile.content), request.headers);
+		await assertPageAccess(homeFile, request.headers);
 	}
 
 	let markdownData = null;

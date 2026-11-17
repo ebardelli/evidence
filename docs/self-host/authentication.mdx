@@ -9,7 +9,7 @@ A self-hosted Evidence deployment ([`evidence serve`](/cli/commands#evidence-ser
 To authenticate users against your organization's identity provider, deploy `evidence serve` behind an authenticating reverse proxy (also known as an identity-aware proxy). The proxy integrates with your identity provider over OIDC or SAML, enforces sign-in on every request, and forwards only authenticated traffic to Evidence.
 
 <Warning>
-  Authentication controls who can reach the deployment; by default it does not scope what each user sees. Every authenticated user is served the same reports, queried against the single warehouse identity defined in [`connection.yaml`](/cli/connections). Upstream self-hosted deployments do not enforce per-report [access control](/features/page-level-access-control) or [row-level security](/features/access-rules) — those are applied against a per-viewer identity available only in [Evidence Studio](/self-host#self-host-vs-evidence-studio). This deployment's fork adds one narrow exception, a page-visibility allowlist described in [Restricting individual pages to an allowlist](#restricting-individual-pages-to-an-allowlist) below — it does not scope query results, so it is still not a substitute for Studio. Deployments that need real per-viewer report or row scoping should use Evidence Studio.
+  Authentication controls who can reach the deployment; by default it does not scope what each user sees. Every authenticated user is served the same reports, queried against the single warehouse identity defined in [`connection.yaml`](/cli/connections). Upstream self-hosted deployments do not enforce per-report [access control](/features/page-level-access-control) or [row-level security](/features/access-rules) — those are applied against a per-viewer identity available only in [Evidence Studio](/self-host#self-host-vs-evidence-studio). This deployment's fork adds one exception, per-page row filters described in [Row-level security](#row-level-security) below. They're narrower than Studio's: DuckDB and MotherDuck connections only, configured page by page.
 </Warning>
 
 ## Architecture
@@ -18,7 +18,7 @@ To authenticate users against your organization's identity provider, deploy `evi
 User ──▶ Authenticating reverse proxy (OIDC / SAML) ──▶ evidence serve
 ```
 
-The proxy is the sole entry point and the authentication boundary; Evidence runs with its built-in authentication disabled. Evidence can optionally display the authenticated user's email in the sidebar (see [Displaying the proxy identity](#displaying-the-proxy-identity) below), but this is cosmetic — reports, queries, and filters remain the same for every authenticated user.
+The proxy is the sole entry point and the authentication boundary; Evidence runs with its built-in authentication disabled. Evidence can optionally display the authenticated user's email in the sidebar (see [Displaying the proxy identity](#displaying-the-proxy-identity) below), but on its own this is cosmetic. Reports and queries are the same for every authenticated user unless a page adds [row filters](#row-level-security).
 
 <Steps>
   <Step title="Restrict network access to the proxy">
@@ -75,15 +75,15 @@ For proxies that only forward a plain header — Authelia/Authentik's `Remote-Em
 | --- | --- |
 | `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` | Name of the inbound header holding the viewer's email (e.g. `X-Auth-Request-Email`). Ignored when JWT mode (above) is configured. |
 | `EVIDENCE_AUTH_PROXY_NAME_HEADER` | Optional: name of the inbound header holding a display name (e.g. `X-Auth-Request-User`) |
-| `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER` | Set to `true` to accept the plain header for [query authorization](#authorizing-queries). Without it, `evidence serve` refuses to start in plain header mode. |
+| `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER` | Set to `true` to accept the plain header for [row-level security](#row-level-security). Without it, `evidence serve` refuses to start in plain header mode when any page has `auth.rows`. |
 
 <Warning>
-  Unlike JWT mode, this is not cryptographically verified — it only changes what the sidebar displays and what `{{ $user.* }}` resolves to based on whatever value is in the header. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity, including bypassing the [page allowlist](#restricting-individual-pages-to-an-allowlist) below. Prefer JWT verification above when your proxy supports it.
+  Unlike JWT mode, this is not cryptographically verified — it only changes what the sidebar displays and what `{{ $user.* }}` resolves to based on whatever value is in the header. Only set `EVIDENCE_AUTH_PROXY_EMAIL_HEADER` when Evidence is reachable exclusively through the proxy (see [Restrict network access to the proxy](#architecture) above) — otherwise a request that reaches Evidence directly can set the header itself and impersonate any identity, including getting around the [row filters](#row-level-security) below. Prefer JWT verification above when your proxy supports it.
 </Warning>
 
 ## Redirecting to sign-in when the proxy identity lapses
 
-Either mode above can end up with no identity on a given request even though it's configured — a JWT that's missing, expired, or otherwise fails verification, or a blank header because the proxy's own session lapsed. By default this degrades quietly to serve mode's "not logged in" sidebar state; a page gated by an `auth:` allowlist (below) instead gets a 403.
+Either mode above can end up with no identity on a given request even though it's configured — a JWT that's missing, expired, or otherwise fails verification, or a blank header because the proxy's own session lapsed. By default this degrades quietly to serve mode's "not logged in" sidebar state; a page with [row filters](#row-level-security) instead gets a 403.
 
 | Env Var | Purpose |
 | --- | --- |
@@ -97,7 +97,7 @@ Either mode above can end up with no identity on a given request even though it'
 ## Using the proxy identity in markdown and SQL
 
 <Warning>
-  This is a local extension on this deployment's fork of Evidence — not part of upstream Evidence. It's convenience/personalization only: it interpolates plain text into markdown and query strings, the same as any other [frontmatter variable](/core-concepts/variables). It is **not** row-level security — nothing stops a page author from omitting a `$user` filter, and nothing scopes results the way [Evidence Studio's row-level security](/features/access-rules) does. It relies on the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above (JWT-verified when configured, otherwise an unverified header).
+  This is a local extension on this deployment's fork of Evidence — not part of upstream Evidence. It's convenience/personalization only: it interpolates plain text into markdown and query strings, the same as any other [frontmatter variable](/core-concepts/variables). It is **not** row-level security: a viewer can edit the SQL their browser sends and drop a `$user` filter. Use [`auth.rows`](#row-level-security) for filters the server enforces. It relies on the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above (JWT-verified when configured, otherwise an unverified header).
 </Warning>
 
 When the same proxy identity used above is configured, it's also exposed to markdown and SQL as [built-in variables](/core-concepts/variables#built-in-variables), the same `{{ $user.* }}` syntax upstream Evidence uses for a Studio-logged-in viewer:
@@ -120,70 +120,47 @@ select * from orders where owner_email = '{{ $user.email }}'
 
 This only resolves in `evidence serve`; in `evidence dev` there is no proxy identity, so `{{ $user.* }}` renders blank and does not fail validation (matching how the same variables behave in an embedded view with no signed-in viewer).
 
-## Restricting individual pages to an allowlist
+## Row-level security
 
 <Warning>
-  This is a local extension on this deployment's fork of Evidence — it is not part of upstream Evidence and will not appear in other Evidence deployments. It is **not** a substitute for [Evidence Studio's](/self-host#self-host-vs-evidence-studio) per-viewer [page-level access control](/features/page-level-access-control) or [row-level security](/features/access-rules): those apply against a verified per-viewer identity and can scope both which reports a viewer sees and which rows they see within a report. This extension only compares the proxy-forwarded email against an allowlist, and it does **not** scope query results — every allowed viewer sees the same data. Deployments that need real per-viewer report or row scoping should use Evidence Studio.
-
-  It inherits the same trust assumptions as [Displaying the proxy identity](#displaying-the-proxy-identity) above: this allowlist is only as strong as the identity check behind it. In JWT mode the identity is cryptographically verified, so the allowlist holds even if a request reaches Evidence directly. In plain header mode it is not — a request that bypasses the proxy can set the header itself and pass the allowlist as anyone, so plain header mode must only be used when Evidence is reachable exclusively through the proxy. **Use JWT mode for any page gating viewer emails against an allowlist.**
+  This is a local extension on this deployment's fork of Evidence. It isn't part of upstream Evidence. It is only as strong as the identity behind it: in JWT mode the identity is cryptographically verified, while in plain header mode a request that bypasses the proxy can claim to be anyone. **Use JWT mode for any page with row filters.**
 </Warning>
 
-A page can be gated to a specific set of viewer emails with an `auth:` block in its frontmatter, checked against the same proxy-forwarded identity used for the sidebar:
+A page can filter the rows each viewer sees with an `auth.rows` block in its frontmatter. Each entry maps a table to a SQL condition over that table's columns; `{{ $user.email }}` is replaced with the viewer's email (as a quoted SQL string, so don't add quotes yourself):
 
 ```md
 ---
-title: Finance summary
+title: School roster
 auth:
-  users: [alice@example.com, bob@example.com]
----
-```
-
-Add `query` to also allow anyone returned by a SQL query (run server-side against `connection.yaml`; the first result column is read as the allowed emails). `users` and `query` are additive — a viewer is allowed if their email appears in either:
-
-```md
----
-auth:
-  users: [alice@example.com]
-  query: select email from allowed_users where page = 'finance'
+  rows:
+    students: school_id in (select school_id from staff_access where email = {{ $user.email }})
+    attendance: school_id in (select school_id from staff_access where email = {{ $user.email }})
+  message: "{email} isn't linked to a school. Ask in #data-access."
 ---
 ```
 
 | Field | Purpose |
 | --- | --- |
-| `auth.users` | Static list of allowed emails. |
-| `auth.query` | SQL query whose first result column is read as allowed emails. Cached for 60 seconds per query. |
-| `auth.message` | Custom message shown to a denied viewer, in place of the default "does not have access" text. `{email}` is replaced with the viewer's email. |
+| `auth.rows` | Table → SQL condition. The key is the table as you write it in SQL (`students`, `main.students`). `{{ $user.email }}` and `{{ $user.first_name }}` are available. |
+| `auth.message` | Message shown to a denied viewer instead of the default "does not have access" text. `{email}` is replaced with the viewer's email. |
 
-If the frontmatter block is absent, the page is unrestricted (unchanged from default behavior). If it's present, a request without a proxy identity (the token missing/invalid in JWT mode, or the header missing/blank in plain header mode) is refused with a 403, as is a viewer whose email matches neither list. If any page has an `auth:` block but neither JWT nor plain header mode is configured, `evidence serve` refuses to start and names those pages. This check only runs in `evidence serve`; in `evidence dev` there is no proxy identity to check against, so pages render normally for local authoring.
+### What the server does
 
-The same check also applies to the page's queries. See [Authorizing queries](#authorizing-queries) below.
+- **Every read is filtered.** Pages fetch their data from the browser through `/api/query`, and each request names its page. Evidence parses the SQL with DuckDB and replaces every reference to a filtered table, including inside joins, subqueries, `SUMMARIZE` and `DESCRIBE`, with `(SELECT * FROM table WHERE <condition>)`, then runs the result. Editing the SQL in the browser doesn't help, because the rewrite happens on the server.
+- **No rows means no access.** If every filtered table on the page comes back empty for the viewer, they get a 403 with `auth.message`, both when opening the page and on its queries. A request with no proxy identity also gets a 403.
+- **Filtered tables stay filtered everywhere.** Once any page filters a table, a query that reads it on behalf of a page *without* its own filter for that table is refused. A viewer can't get around a filter by naming another page.
+- **Other tables are not restricted.** Tables no page filters are readable from any page, as in upstream Evidence.
 
-Use `auth.message` to tell a denied viewer how to get access, instead of the generic default:
+Once any page uses `auth.rows`, every `/api/query` request must also:
 
-```md
----
-auth:
-  users: [alice@example.com]
-  message: "{email} isn't on the Finance team. Ask in #finance-access for a share."
----
-```
+- be a single `SELECT` statement;
+- not define a CTE with the same name as a filtered table;
+- not use a table function that reads tables or files by name (`query`, `query_table`, `read_*`, `*_scan`, `parquet_*`, `iceberg_*`, `delta_*`, `sniff_csv`).
 
-## Authorizing queries
-
-Pages fetch their data from the browser through Evidence's `/api/query` endpoint. In `evidence serve`, every request to it must name the page it comes from, and Evidence checks it before running anything:
-
-1. **Identity.** If any page has an `auth:` block, the request needs a proxy identity, or it gets a 401. Plain header identities count only with `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true`.
-2. **Page access.** The page must exist (404 otherwise), and the viewer must pass its `auth:` block, using the same check and the same `auth.query` cache as loading the page (403 otherwise, with the page's `auth.message`). A viewer can't fetch a gated page's data by naming it from another page.
-3. **Tables.** On DuckDB and MotherDuck connections, the SQL must be a single `SELECT`, and every table and table function it reads must be one that the page's own queries read (403 otherwise). Inputs used with `.literal` (for example `from {{db_selector.literal}}.students`) only allow their own options: the inline `options`, or the values of their `data` query.
-
-`evidence dev` runs any SQL as before.
-
-| Env Var | Purpose |
-| --- | --- |
-| `EVIDENCE_QUERY_AUTHZ` | Set to `off` to go back to running any SQL the browser sends in `evidence serve`, and log a warning at startup. Temporary: kept for one release. |
+`evidence serve` refuses to start if any page has `auth.rows` and a reverse-proxy identity isn't configured, if plain header mode is used without `EVIDENCE_AUTH_PROXY_TRUST_PLAIN_HEADER=true`, or if the connection isn't DuckDB or MotherDuck. `evidence dev` ignores `auth.rows` and shows unfiltered data, so you can author pages locally.
 
 <Warning>
-  The table check limits which tables a page's queries can reach. It doesn't limit what a viewer does with those tables: someone allowed onto a page can still write their own `SELECT` against the tables that page reads, for example to see raw rows behind an aggregate. Table and column names (not data) from `information_schema` are readable from any page, because table filters and dimension grids need them. On connections other than DuckDB and MotherDuck, only the identity and page access checks run.
+  Filters apply to the tables named in `auth.rows`, not to the data behind them. If a view, table macro or another table exposes the same rows, filter it too. If a filtered table is a view over files, the files can't be read by name (the reader functions above are blocked). Access results are cached for 60 seconds per viewer and page, so a change to the access table can take up to a minute to apply.
 </Warning>
 
 ## Supported proxies and providers

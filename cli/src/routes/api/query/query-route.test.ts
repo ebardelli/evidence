@@ -1,12 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runQuery } from '$lib/server/run-query';
-import { authorizeQuery } from '$lib/server/query-authz.server';
+import { authorizeQuery } from '$lib/server/row-security.server';
 
 vi.mock('$lib/server/run-query', () => ({ runQuery: vi.fn() }));
-vi.mock('$lib/server/query-authz.server', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/server/query-authz.server')>()),
-	authorizeQuery: vi.fn()
-}));
+vi.mock('$lib/server/row-security.server', () => ({ authorizeQuery: vi.fn() }));
 
 import { POST } from './+server';
 
@@ -20,19 +17,18 @@ async function post(body: unknown): Promise<{ status: number; body: Record<strin
 	return { status: response.status, body: await response.json() };
 }
 
-let saved: [string, string | undefined][];
+let saved: string | undefined;
 beforeEach(() => {
-	saved = ['EVIDENCE_SERVE', 'EVIDENCE_QUERY_AUTHZ'].map((k) => [k, process.env[k]]);
+	saved = process.env.EVIDENCE_SERVE;
 	delete process.env.EVIDENCE_SERVE;
-	delete process.env.EVIDENCE_QUERY_AUTHZ;
 	vi.mocked(runQuery).mockReset().mockResolvedValue({ rows: [{ a: 1 }], columns: [] });
-	vi.mocked(authorizeQuery).mockReset().mockResolvedValue({ ok: true });
+	vi.mocked(authorizeQuery)
+		.mockReset()
+		.mockImplementation(async (_page, sql) => ({ ok: true, sql }));
 });
 afterEach(() => {
-	for (const [k, v] of saved) {
-		if (v === undefined) delete process.env[k];
-		else process.env[k] = v;
-	}
+	if (saved === undefined) delete process.env.EVIDENCE_SERVE;
+	else process.env.EVIDENCE_SERVE = saved;
 });
 
 describe('POST /api/query', () => {
@@ -41,13 +37,6 @@ describe('POST /api/query', () => {
 		expect(res.status).toBe(200);
 		expect(authorizeQuery).not.toHaveBeenCalled();
 		expect(runQuery).toHaveBeenCalledWith('select 1');
-	});
-
-	it('requires a page in serve mode', async () => {
-		process.env.EVIDENCE_SERVE = '1';
-		const res = await post({ sql: 'select 1' });
-		expect(res).toEqual({ status: 400, body: { error: 'Missing page parameter' } });
-		expect(runQuery).not.toHaveBeenCalled();
 	});
 
 	it('returns the authorization failure as { error } with its status', async () => {
@@ -59,19 +48,12 @@ describe('POST /api/query', () => {
 		expect(runQuery).not.toHaveBeenCalled();
 	});
 
-	it('runs the query once authorized', async () => {
+	it('runs the SQL authorizeQuery returns', async () => {
 		process.env.EVIDENCE_SERVE = '1';
+		vi.mocked(authorizeQuery).mockResolvedValue({ ok: true, sql: 'select filtered' });
 		const res = await post({ sql: 'select 1', page: '' });
 		expect(res.status).toBe(200);
-		expect(runQuery).toHaveBeenCalledWith('select 1');
-	});
-
-	it('skips authorization with EVIDENCE_QUERY_AUTHZ=off', async () => {
-		process.env.EVIDENCE_SERVE = '1';
-		process.env.EVIDENCE_QUERY_AUTHZ = 'off';
-		const res = await post({ sql: 'select 1' });
-		expect(res.status).toBe(200);
-		expect(authorizeQuery).not.toHaveBeenCalled();
+		expect(runQuery).toHaveBeenCalledWith('select filtered');
 	});
 
 	it('rejects a missing sql field', async () => {
