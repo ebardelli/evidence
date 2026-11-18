@@ -387,8 +387,22 @@ async function getInstance(config: DuckDBConfig): Promise<DuckDBInstanceType> {
 // jsType (see type-mapping.ts) is 'string' — coerce so the value actually
 // matches its declared column type. Dates are left alone: they're also
 // `typeof === 'object'` but normalizeDateRows knows how to handle a raw Date.
+//
+// BIGINT/HUGEINT (and SUM over smaller integers) come back as JS bigint, which
+// JSON.stringify can't serialize. Top-level numeric columns are converted by
+// normalizeNumericRows, but not values nested in LIST/ARRAY/STRUCT/MAP, so
+// those are converted here: to a number when exact, else a decimal string.
 function toSerializable(value: unknown): unknown {
+	if (typeof value === 'bigint') {
+		return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
+			? Number(value)
+			: value.toString();
+	}
 	if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
+	if (Array.isArray(value)) return value.map(toSerializable);
+	if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+		return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, toSerializable(v)]));
+	}
 	return value;
 }
 

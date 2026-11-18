@@ -237,6 +237,34 @@ describe('locked DuckDB instance', () => {
 	});
 });
 
+describe('result values', () => {
+	it('returns nested BIGINT/HUGEINT values as JSON-serializable numbers or strings', async () => {
+		const result = await executeDuckDBQuery(
+			`select [1, 2]::smallint[] as small, [sum(n::smallint)] as total, ` +
+				`{'id': 3::bigint, 'big': 170141183460469231731687303715884105727::hugeint} as s, ` +
+				`map {'k': [4::bigint]} as m from t`,
+			locked()
+		);
+		const row = result.rows[0]!;
+		expect(() => JSON.stringify(result.rows)).not.toThrow();
+		expect(row.small).toEqual([1, 2]);
+		expect(row.total).toEqual([45]);
+		expect(row.s).toEqual({ id: 3, big: '170141183460469231731687303715884105727' });
+	});
+
+	it('binds setup_sql macros with subqueries and positional expression arguments', async () => {
+		const config = locked({
+			setupSql: `-- test ${seq++}\nCREATE TABLE t AS SELECT 1 AS n;\n` +
+				"CREATE MACRO t_scalar(a) AS (SELECT a); CREATE MACRO t_sub(a) AS EXISTS (SELECT 1 WHERE a = 'x');"
+		});
+		const result = await executeDuckDBQuery(
+			"select t_sub(lower('X')) as s, t_scalar(lower('X')) as c",
+			config
+		);
+		expect(result.rows[0]).toEqual({ s: true, c: 'x' });
+	});
+});
+
 describe('unlocked DuckDB instance', () => {
 	it('keeps today’s behaviour with lock: false (and by default in dev mode)', async () => {
 		for (const lock of [false, undefined]) {
