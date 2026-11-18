@@ -74,6 +74,35 @@ describe('inspect', () => {
 		expect([...info.cteNames]).toEqual(['totals']);
 		expect([...info.functions]).toEqual(['read_csv']);
 	});
+
+	const cte = (key: string, from: JsonNode, type = 'SELECT_NODE'): JsonNode => ({
+		key,
+		value: { query_node: { type, from_table: from } }
+	});
+
+	it('skips references that bind to a CTE, scoped as DuckDB binds them', () => {
+		// WITH a AS (FROM b), b AS (FROM a) SELECT … FROM b JOIN main.a JOIN x
+		const statement = select(
+			{ type: 'JOIN', left: table('B'), right: { type: 'JOIN', left: table('a', 'main'), right: table('x') } },
+			{ cte_map: { map: [cte('a', table('b')), cte('b', table('a'))] } }
+		);
+		const refs = inspect(statement).tables.map((t) => [t.schema, t.table].filter(Boolean).join('.'));
+		// `b` inside `a` is the real table (defined later); `main.a` is qualified.
+		expect(refs.sort()).toEqual(['b', 'main.a', 'x']);
+	});
+
+	it('lets a recursive CTE see itself, and not leak out of a subquery', () => {
+		const statement = select(table('r'), {
+			where_clause: {
+				class: 'SUBQUERY',
+				subquery: select(table('inner_cte'), { cte_map: { map: [cte('inner_cte', table('t'))] } })
+			},
+			cte_map: { map: [cte('r', table('r'), 'RECURSIVE_CTE_NODE'), cte('s', table('s'))] }
+		});
+		const refs = inspect(statement).tables.map((t) => t.table);
+		expect(refs.sort()).toEqual(['s', 't']);
+		expect(inspect(select(table('inner_cte'))).tables).toHaveLength(1);
+	});
 });
 
 describe('rewriteTables / filteredRef', () => {
@@ -104,6 +133,19 @@ describe('rewriteTables / filteredRef', () => {
 		const out = rewriteTables(select(table('students')), (_r, node) => filteredRef(template, node));
 		expect(((out.node as JsonNode).from_table as JsonNode).alias).toBe('students');
 		expect(((template.subquery as JsonNode).node as JsonNode).from_table).toMatchObject({ table_name: 'placeholder' });
+	});
+
+	it('leaves CTE references alone but rewrites real tables inside CTE definitions', () => {
+		const statement = select(table('students'), {
+			cte_map: { map: [{ key: 'students', value: { query_node: { type: 'SELECT_NODE', from_table: table('students') } } }] }
+		});
+		const replace = vi.fn((_r, node: JsonNode) => filteredRef(template, node));
+		const out = rewriteTables(statement, replace);
+		expect(replace).toHaveBeenCalledTimes(1);
+		const node = out.node as JsonNode;
+		expect((node.from_table as JsonNode).type).toBe('BASE_TABLE');
+		const map = (node.cte_map as { map: { value: { query_node: JsonNode } }[] }).map;
+		expect((map[0]!.value.query_node.from_table as JsonNode).type).toBe('SUBQUERY');
 	});
 
 	it('does not walk into replacements', () => {

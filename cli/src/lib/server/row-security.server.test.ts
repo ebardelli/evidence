@@ -239,6 +239,28 @@ describe('authorizeQuery', () => {
 		});
 	});
 
+	it('allows CTEs that shadow no filtered table', async () => {
+		parsesTo(
+			select(table('x'), {
+				cte_map: { map: [{ key: 'x', value: { query_node: { type: 'SELECT_NODE', from_table: table('students') } } }] }
+			})
+		);
+		expect(await authorizeQuery('roster', 'with x as (…) select * from x', as('alice@x.org'))).toEqual({
+			ok: true,
+			sql: 'REWRITTEN'
+		});
+		// An undeclared real table is still refused inside a CTE.
+		parsesTo(
+			select(table('x'), {
+				cte_map: { map: [{ key: 'x', value: { query_node: { type: 'SELECT_NODE', from_table: table('teachers') } } }] }
+			})
+		);
+		expect(await authorizeQuery('roster', 'with x as (…) select * from x', as('alice@x.org'))).toMatchObject({
+			status: 403,
+			error: expect.stringContaining('teachers')
+		});
+	});
+
 	it('returns 400 for anything but a single SELECT', async () => {
 		vi.mocked(parseSelect).mockResolvedValue({ ok: false, reason: 'not-select', message: 'Only single SELECT statements are allowed' });
 		expect(await authorizeQuery('roster', 'drop table students', as('alice@x.org'))).toMatchObject({ status: 400 });
@@ -283,6 +305,30 @@ describe('assertPageAccess', () => {
 			body: { message: 'bob@x.org has no students' }
 		});
 		await expect(assertPageAccess(roster, as())).rejects.toMatchObject({ status: 403 });
+	});
+
+	it('checks an unqualified key against every matching table in the catalog', async () => {
+		const sent: string[] = [];
+		vi.mocked(runQuery).mockImplementation(async (sql: string) => {
+			sent.push(sql);
+			if (sql.includes('duckdb_tables()')) {
+				return {
+					rows: [
+						{ c: 'warehouse', s: 'year_2026', t: 'students' },
+						{ c: 'warehouse', s: 'year_2025', t: 'students' }
+					],
+					columns: []
+				};
+			}
+			// The combined probe fails (an old schema lacks a column), so each runs alone.
+			if (sql.includes('UNION ALL')) return { rows: [], columns: [], error: 'no column school_id' };
+			if (sql.includes('"year_2026"')) return { rows: [], columns: [], error: 'no column school_id' };
+			return { rows: sql.includes("'alice@x.org'") ? [{ ok: 1 }] : [], columns: [] };
+		});
+		const roster = (await getMarkdownFile(filtered, 'roster'))!;
+		await expect(assertPageAccess(roster, as('alice@x.org'))).resolves.toBeUndefined();
+		expect(sent.some((sql) => sql.includes('FROM "warehouse"."year_2025"."students" WHERE'))).toBe(true);
+		await expect(assertPageAccess(roster, as('bob@x.org'))).rejects.toMatchObject({ status: 403 });
 	});
 
 	it('500s when the filter itself fails', async () => {

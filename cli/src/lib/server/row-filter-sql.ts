@@ -146,7 +146,10 @@ function refOf(node: JsonNode): TableRef {
 }
 
 export interface StatementInfo {
-	/** Every table reference (`FROM x`, joins, subqueries, SUMMARIZE/DESCRIBE targets…). */
+	/**
+	 * Every table reference (`FROM x`, joins, subqueries, SUMMARIZE/DESCRIBE
+	 * targets…), except references that bind to a CTE.
+	 */
 	tables: TableRef[];
 	/** Lowercased names of every CTE defined anywhere in the statement. */
 	cteNames: Set<string>;
@@ -154,35 +157,85 @@ export interface StatementInfo {
 	functions: Set<string>;
 }
 
+type Scope = ReadonlySet<string>;
+
+interface CteScopes {
+	/** The CTE names visible in the node's own body (its FROM, WHERE, …). */
+	body: Scope;
+	/** For each `cte_map` entry, in order, the names visible in its definition. */
+	entries: Scope[];
+}
+
+function cteEntries(node: JsonNode): JsonNode[] | null {
+	const cteMap = node.cte_map;
+	if (!isObject(cteMap) || !Array.isArray(cteMap.map)) return null;
+	return cteMap.map.filter(isObject);
+}
+
+/**
+ * CTE scoping as DuckDB binds it: a CTE's definition sees the CTEs defined
+ * before it in the same WITH, and itself only if it's recursive; the query
+ * body sees them all. So in `WITH a AS (FROM b), b AS (…)`, `a` reads the
+ * real table `b`.
+ */
+function cteScopes(entries: JsonNode[], outer: Scope): CteScopes {
+	let visible = new Set(outer);
+	const scopes: Scope[] = [];
+	for (const entry of entries) {
+		const name = typeof entry.key === 'string' ? entry.key.toLowerCase() : null;
+		const definition = isObject(entry.value) ? entry.value.query_node : null;
+		const recursive = isObject(definition) && definition.type === 'RECURSIVE_CTE_NODE';
+		scopes.push(recursive && name ? new Set([...visible, name]) : visible);
+		if (name) visible = new Set([...visible, name]);
+	}
+	return { body: visible, entries: scopes };
+}
+
+/** A BASE_TABLE that names a CTE in scope: unqualified, and a visible CTE name. */
+function isCteRef(node: JsonNode, scope: Scope): boolean {
+	return (
+		!node.schema_name &&
+		!node.catalog_name &&
+		typeof node.table_name === 'string' &&
+		scope.has(node.table_name.toLowerCase())
+	);
+}
+
 export function inspect(statement: JsonNode): StatementInfo {
 	const info: StatementInfo = { tables: [], cteNames: new Set(), functions: new Set() };
 
-	function walk(value: unknown): void {
+	function walk(value: unknown, scope: Scope): void {
 		if (Array.isArray(value)) {
-			for (const item of value) walk(item);
+			for (const item of value) walk(item, scope);
 			return;
 		}
 		if (!isObject(value)) return;
 
-		const cteMap = value.cte_map;
-		if (isObject(cteMap) && Array.isArray(cteMap.map)) {
-			for (const entry of cteMap.map) {
-				if (isObject(entry) && typeof entry.key === 'string') {
-					info.cteNames.add(entry.key.toLowerCase());
-				}
-			}
+		const entries = cteEntries(value);
+		let body = scope;
+		if (entries) {
+			const scopes = cteScopes(entries, scope);
+			body = scopes.body;
+			entries.forEach((entry, i) => {
+				if (typeof entry.key === 'string') info.cteNames.add(entry.key.toLowerCase());
+				walk(entry.value, scopes.entries[i]!);
+			});
 		}
+
 		if (value.type === 'BASE_TABLE') {
-			info.tables.push(refOf(value));
+			if (!isCteRef(value, body)) info.tables.push(refOf(value));
 		} else if (value.type === 'TABLE_FUNCTION' && isObject(value.function)) {
 			const name = value.function.function_name;
 			if (typeof name === 'string') info.functions.add(name.toLowerCase());
 		}
 
-		for (const child of Object.values(value)) walk(child);
+		for (const [key, child] of Object.entries(value)) {
+			if (key === 'cte_map' && entries) continue;
+			walk(child, body);
+		}
 	}
 
-	walk(statement);
+	walk(statement, new Set());
 	return info;
 }
 
@@ -251,22 +304,40 @@ export function filteredRef(template: JsonNode, ref: JsonNode): JsonNode {
 
 /**
  * A copy of `statement` with every BASE_TABLE `replace` returns a node for
- * swapped for that node. Replacements aren't walked again.
+ * swapped for that node. References that bind to a CTE are left alone, and
+ * replacements aren't walked again.
  */
 export function rewriteTables(
 	statement: JsonNode,
 	replace: (ref: TableRef, node: JsonNode) => JsonNode | null
 ): JsonNode {
-	function walk(value: unknown): unknown {
-		if (Array.isArray(value)) return value.map(walk);
+	function walk(value: unknown, scope: Scope): unknown {
+		if (Array.isArray(value)) return value.map((item) => walk(item, scope));
 		if (!isObject(value)) return value;
-		if (value.type === 'BASE_TABLE') {
+
+		const entries = cteEntries(value);
+		const scopes = entries ? cteScopes(entries, scope) : null;
+		const body = scopes?.body ?? scope;
+
+		if (value.type === 'BASE_TABLE' && !isCteRef(value, body)) {
 			const replacement = replace(refOf(value), value);
 			if (replacement) return replacement;
 		}
 		const out: JsonNode = {};
-		for (const [key, child] of Object.entries(value)) out[key] = walk(child);
+		for (const [key, child] of Object.entries(value)) {
+			if (key === 'cte_map' && entries && scopes) {
+				out[key] = {
+					...(child as JsonNode),
+					map: entries.map((entry, i) => ({
+						...entry,
+						value: walk(entry.value, scopes.entries[i]!)
+					}))
+				};
+			} else {
+				out[key] = walk(child, body);
+			}
+		}
 		return out;
 	}
-	return walk(statement) as JsonNode;
+	return walk(statement, new Set()) as JsonNode;
 }

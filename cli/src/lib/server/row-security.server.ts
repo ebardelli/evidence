@@ -164,6 +164,71 @@ function combinedPredicate(predicates: string[], viewer: ProxyUser): string {
 // Page access
 // ---------------------------------------------------------------------------
 
+function quoteIdent(part: string): string {
+	return `"${part.replace(/"/g, '""')}"`;
+}
+
+function keyParts(key: string): string[] {
+	return key.split('.').map((part) => part.trim().replace(/^"(.*)"$/, '$1'));
+}
+
+/**
+ * The fully qualified tables and views an `auth.rows` key covers, newest
+ * schema first. A key with fewer than three parts covers every match in every
+ * attached catalog (see tableMatches), and usually doesn't resolve on its own
+ * when the table lives in an attached database, so it's looked up in DuckDB's
+ * catalog. Falls back to the key as written when nothing matches, so DuckDB's
+ * own "does not exist" error comes through.
+ */
+async function accessCheckTargets(key: string): Promise<string[]> {
+	const parts = keyParts(key);
+	if (parts.length >= 3) return [key];
+	const [table, schema] = [...parts].reverse();
+	const where = (nameColumn: string) =>
+		[
+			'NOT internal',
+			`lower(${nameColumn}) = lower(${sqlString(table ?? '')})`,
+			...(schema ? [`lower(schema_name) = lower(${sqlString(schema)})`] : [])
+		].join(' AND ');
+	const result = await runQuery(
+		'SELECT database_name AS c, schema_name AS s, name AS t FROM (' +
+			`SELECT database_name, schema_name, table_name AS name FROM duckdb_tables() WHERE ${where('table_name')} UNION ALL ` +
+			`SELECT database_name, schema_name, view_name AS name FROM duckdb_views() WHERE ${where('view_name')}` +
+			') ORDER BY s DESC, c'
+	);
+	if (result.error || !result.rows.length) return [key];
+	return result.rows.map((row) => [row.c, row.s, row.t].map((p) => quoteIdent(String(p))).join('.'));
+}
+
+/**
+ * Whether `predicate` keeps any row of the table(s) `key` covers. Every
+ * candidate is tried in one query first; if that fails (say an older schema
+ * lacks a column the predicate uses), one at a time, newest first. Errors
+ * only when every candidate does.
+ */
+async function anyRowMatches(key: string, where: string): Promise<boolean> {
+	const targets = await accessCheckTargets(key);
+	const probe = (target: string) => `SELECT 1 AS ok FROM ${target} WHERE ${where} LIMIT 1`;
+
+	if (targets.length > 1) {
+		const union = await runQuery(
+			`SELECT 1 AS ok FROM (${targets.map((t) => `(${probe(t)})`).join(' UNION ALL ')}) LIMIT 1`
+		);
+		if (!union.error) return union.rows.length > 0;
+	}
+
+	const errors: string[] = [];
+	for (const target of targets) {
+		const result = await runQuery(probe(target));
+		if (result.error) errors.push(result.error);
+		else if (result.rows.length > 0) return true;
+	}
+	if (errors.length === targets.length) {
+		error(500, `auth.rows filter for ${key} failed: ${errors[0]}`);
+	}
+	return false;
+}
+
 async function viewerHasRows(policy: PagePolicy, viewer: ProxyUser): Promise<boolean> {
 	const key = `${policy.slug}\0${viewer.email.toLowerCase()}`;
 	const cached = accessCache.get(key);
@@ -177,9 +242,7 @@ async function viewerHasRows(policy: PagePolicy, viewer: ProxyUser): Promise<boo
 		} catch (e) {
 			error(500, (e as Error).message);
 		}
-		const result = await runQuery(`SELECT 1 AS ok FROM ${table} WHERE ${where} LIMIT 1`);
-		if (result.error) error(500, `auth.rows filter for ${table} failed: ${result.error}`);
-		if (result.rows.length > 0) {
+		if (await anyRowMatches(table, where)) {
 			allowed = true;
 			break;
 		}
